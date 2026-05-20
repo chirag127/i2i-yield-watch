@@ -366,9 +366,9 @@ function renderLoanCard(loan, index) {
   // Animation delay
   const delay = (index % LOANS_PER_PAGE) * 25;
 
-  const url = loan.loanUrl
-    || `https://www.i2ifunding.com/invest/\
-loan-detail/${loan.loanId}`;
+  const url = (loan.borrowerRef && loan.loanId)
+    ? `https://www.i2ifunding.com/borrower/listing/public-profile/${loan.borrowerRef}/${loan.loanId}`
+    : (loan.loanUrl || `https://www.i2ifunding.com/invest/loan-detail/${loan.loanId}`);
 
   // Credit display
   const creditDisplay =

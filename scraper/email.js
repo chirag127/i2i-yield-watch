@@ -30,6 +30,10 @@ function formatEmailHtml(
       ? '#ff4444' : rate >= 50
         ? '#ff8800' : '#6b7280';
 
+    const url = (loan.borrowerRef && loan.loanId)
+      ? `https://www.i2ifunding.com/borrower/listing/public-profile/${loan.borrowerRef}/${loan.loanId}`
+      : (loan.loanUrl || `https://www.i2ifunding.com/invest/loan-detail/${loan.loanId}`);
+
     return `
       <tr>
         <td style="
@@ -37,11 +41,12 @@ function formatEmailHtml(
           border-bottom: 1px solid #eee;
           text-align: center;
         ">
-          <span style="
+          <a href="${url}" style="
             color: ${color};
             font-weight: bold;
             font-size: 18px;
-          ">${rate}%</span>
+            text-decoration: none;
+          ">${rate}%</a>
         </td>
         <td style="
           padding: 12px;

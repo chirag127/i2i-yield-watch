@@ -47,10 +47,15 @@ async function sendDiscord(
               .toLocaleString('en-IN')}`
           : 'N/A';
 
+        const url = (loan.borrowerRef && loan.loanId)
+          ? `https://www.i2ifunding.com/borrower/listing/public-profile/${loan.borrowerRef}/${loan.loanId}`
+          : (loan.loanUrl || `https://www.i2ifunding.com/invest/loan-detail/${loan.loanId}`);
+
         return {
           title:
             `🔥 ${rate}% p.a. `
             + `| ${loan.location || 'Unknown'}`,
+          url,
           color,
           fields: [
             {

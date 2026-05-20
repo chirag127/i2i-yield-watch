@@ -22,8 +22,12 @@ function formatLoanLine(loan) {
     : 'N/A';
   const product = loan.product || '';
 
+  const url = (loan.borrowerRef && loan.loanId)
+    ? `https://www.i2ifunding.com/borrower/listing/public-profile/${loan.borrowerRef}/${loan.loanId}`
+    : (loan.loanUrl || `https://www.i2ifunding.com/invest/loan-detail/${loan.loanId}`);
+
   return (
-    `🔥 <b>${rate}% p.a.</b> | ${loc} `
+    `🔥 <a href="${url}"><b>${rate}% p.a.</b></a> | ${loc} `
     + `| ${amt} | Score: ${score}\n`
     + `   Credit: ${credit} `
     + `| ${remaining} remaining `
