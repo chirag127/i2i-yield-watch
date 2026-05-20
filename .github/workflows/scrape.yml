@@ -4,7 +4,13 @@ on:
   schedule:
     # Every 15 minutes (public repo = unlimited minutes)
     - cron: '*/15 * * * *'
+  push:
+    branches:
+      - main
   workflow_dispatch: # Manual trigger from GitHub UI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
