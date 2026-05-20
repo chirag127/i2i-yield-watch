@@ -1,7 +1,6 @@
 // dashboard/app.js
-// Complete dashboard logic for i2i Yield Watch.
-// Pure vanilla JS — no frameworks, no build tools.
-// Reads ../data/active_loans.json via fetch.
+// i2i Yield Watch — Command Center Dashboard
+// Pure vanilla JS. Reads ../data/active_loans.json.
 
 /* ================================================
    State
@@ -17,7 +16,7 @@ let refreshCountdown = 300;
 
 const filters = {
   interestRateMin: 0,
-  interestRateMax: 100,
+  interestRateMax: 200,
   priorities: ['VERY_HIGH', 'MEDIUM', 'LOW'],
   creditScore: 'all',
   location: '',
@@ -32,9 +31,6 @@ let currentSort = 'interestRate_desc';
    Utilities
    ================================================ */
 
-/**
- * Debounce a function call.
- */
 function debounce(fn, delay = 300) {
   let timer;
   return (...args) => {
@@ -44,7 +40,7 @@ function debounce(fn, delay = 300) {
 }
 
 /**
- * Format number as Indian currency (₹X,XX,XXX).
+ * Format number as Indian currency ₹X,XX,XXX.
  */
 function formatCurrency(num) {
   if (num == null || isNaN(num)) return '—';
@@ -52,7 +48,7 @@ function formatCurrency(num) {
 }
 
 /**
- * Format a date string to human-readable form.
+ * Format date string to compact form.
  */
 function formatDate(dateStr) {
   if (!dateStr) return '—';
@@ -60,8 +56,11 @@ function formatDate(dateStr) {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;
     return d.toLocaleString('en-IN', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
     });
   } catch {
     return dateStr;
@@ -69,20 +68,19 @@ function formatDate(dateStr) {
 }
 
 /**
- * Show a toast notification.
+ * Show toast notification.
  */
 function showToast(message, type = 'info') {
-  const container = document.getElementById(
+  const c = document.getElementById(
     'toast-container'
   );
-  const toast = document.createElement('div');
-  toast.className = `toast ${type}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = message;
+  c.appendChild(t);
   setTimeout(() => {
-    toast.classList.add('fadeout');
-    setTimeout(() => toast.remove(), 300);
+    t.classList.add('fadeout');
+    setTimeout(() => t.remove(), 300);
   }, 4000);
 }
 
@@ -103,74 +101,55 @@ async function loadData() {
     ).catch(() => fetch(
       '../data/active_loans.json'
     ));
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     const data = await res.json();
     allLoans = data.loans || [];
 
-    // Update last-updated timestamp
-    const lastUpdatedEl = document.getElementById(
+    // Update timestamp
+    const el = document.getElementById(
       'last-updated'
     );
-    if (data.generatedAt) {
-      lastUpdatedEl.textContent =
-        'Updated: ' + formatDate(data.generatedAt);
-    } else {
-      lastUpdatedEl.textContent =
-        'No data yet';
-    }
+    el.textContent = data.generatedAt
+      ? formatDate(data.generatedAt)
+      : 'NO DATA';
 
-    // Populate product filter dropdown
     populateProductFilter(allLoans);
-
-    // Run the render pipeline
     runPipeline();
-
     loading.style.display = 'none';
 
   } catch (err) {
     loading.innerHTML = `
       <div class="empty-state">
-        <div class="emoji">📭</div>
-        <p>Could not load loan data.</p>
-        <p style="font-size:13px;margin-top:8px;
-          color:var(--text-muted)">
+        <div class="emoji">⊘</div>
+        <p>Failed to load loan data</p>
+        <p style="font-size:12px;margin-top:6px;
+          color:var(--text-muted);
+          font-family:var(--font-data)">
           ${err.message}
         </p>
       </div>`;
-    showToast(
-      'Failed to load data: ' + err.message,
-      'error'
-    );
+    showToast('Data load failed: ' + err.message,
+      'error');
   }
 }
 
-/**
- * Populate the product dropdown with unique values
- * from the loaded loans.
- */
 function populateProductFilter(loans) {
-  const select = document.getElementById(
+  const sel = document.getElementById(
     'filter-product'
   );
   const products = [
     ...new Set(
-      loans
-        .map((l) => l.product)
-        .filter(Boolean)
+      loans.map((l) => l.product).filter(Boolean)
     ),
   ].sort();
-
-  // Keep the "All" option, remove old dynamics
-  select.innerHTML =
-    '<option value="all">All Products</option>';
+  sel.innerHTML =
+    '<option value="all">All</option>';
   for (const p of products) {
-    const opt = document.createElement('option');
-    opt.value = p;
-    opt.textContent = p;
-    select.appendChild(opt);
+    const o = document.createElement('option');
+    o.value = p;
+    o.textContent = p;
+    sel.appendChild(o);
   }
 }
 
@@ -200,21 +179,22 @@ function renderStats(loans) {
   const high = loans.filter(
     (l) => l.priority === 'VERY_HIGH'
   ).length;
-  const avgRate = total > 0
-    ? (loans.reduce(
-        (s, l) => s + (l.interestRate || 0), 0
-      ) / total).toFixed(1)
+  const rates = loans.map(
+    (l) => l.interestRate || 0
+  );
+  const scores = loans.map(
+    (l) => l.yieldScore || 0
+  );
+  const avgRate = total
+    ? (rates.reduce((a, b) => a + b, 0)
+        / total).toFixed(1)
     : '0';
-  const avgScore = total > 0
-    ? (loans.reduce(
-        (s, l) => s + (l.yieldScore || 0), 0
-      ) / total).toFixed(1)
+  const avgScore = total
+    ? (scores.reduce((a, b) => a + b, 0)
+        / total).toFixed(1)
     : '0';
-  const highest = total > 0
-    ? Math.max(
-        ...loans.map((l) => l.interestRate || 0)
-      ).toFixed(1)
-    : '0';
+  const highest = total
+    ? Math.max(...rates).toFixed(1) : '0';
 
   animateValue('stat-total-value', total);
   animateValue('stat-high-value', high);
@@ -233,31 +213,24 @@ function animateValue(id, target) {
   const el = document.getElementById(id);
   const start = parseInt(el.textContent) || 0;
   const diff = target - start;
-  if (diff === 0) {
-    el.textContent = target;
-    return;
-  }
-  const duration = 400;
-  const startTime = performance.now();
-
+  if (diff === 0) { el.textContent = target; return; }
+  const duration = 500;
+  const t0 = performance.now();
   function step(now) {
-    const elapsed = now - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    const eased = 1 - Math.pow(1 - progress, 3);
+    const p = Math.min((now - t0) / duration, 1);
+    const eased = 1 - Math.pow(1 - p, 3);
     el.textContent = Math.round(
       start + diff * eased
     );
-    if (progress < 1) {
-      requestAnimationFrame(step);
-    }
+    if (p < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
 }
 
 function updateLoanCount(count) {
   document.getElementById('loan-count').innerHTML =
-    `Showing <strong>${count}</strong> loan`
-    + (count !== 1 ? 's' : '');
+    `<strong>${count}</strong> LOAN`
+    + (count !== 1 ? 'S' : '');
 }
 
 /* ================================================
@@ -274,13 +247,12 @@ function applyFilters(loans) {
       loan.priority || 'LOW'
     )) return false;
 
-    // Credit score filter
     if (filters.creditScore !== 'all') {
       const cs = loan.creditScoreNumeric;
       const csStr = loan.creditScore || '';
       switch (filters.creditScore) {
         case 'no_history':
-          if (!/no history/i.test(csStr)
+          if (!/no.?history/i.test(csStr)
             && cs !== null) return false;
           break;
         case 'below_550':
@@ -300,7 +272,6 @@ function applyFilters(loans) {
       }
     }
 
-    // Location filter
     if (filters.location) {
       const loc = (loan.location || '').toLowerCase();
       if (!loc.includes(
@@ -308,32 +279,25 @@ function applyFilters(loans) {
       )) return false;
     }
 
-    // Product filter
     if (filters.product !== 'all') {
       if (loan.product !== filters.product)
         return false;
     }
 
-    // Funding remaining filter
     if (filters.fundingRemainingMin > 0) {
-      const remaining = loan.fundingRemaining || 0;
-      if (remaining < filters.fundingRemainingMin)
+      const rem = loan.fundingRemaining || 0;
+      if (rem < filters.fundingRemainingMin)
         return false;
     }
 
-    // Global search
     if (filters.searchQuery) {
       const q = filters.searchQuery.toLowerCase();
-      const haystack = [
-        loan.location,
-        loan.purpose,
-        loan.product,
-        loan.creditScore,
-        loan.riskCategory,
-        loan.loanId,
-        loan.employmentType,
+      const hay = [
+        loan.location, loan.purpose, loan.product,
+        loan.creditScore, loan.riskCategory,
+        loan.loanId, loan.employmentType,
       ].filter(Boolean).join(' ').toLowerCase();
-      if (!haystack.includes(q)) return false;
+      if (!hay.includes(q)) return false;
     }
 
     return true;
@@ -348,21 +312,15 @@ function applySort(loans, sortKey) {
   sorted.sort((a, b) => {
     let va = a[field];
     let vb = b[field];
-
-    // Handle madeLiveOn as date
     if (field === 'madeLiveOn') {
       va = va ? new Date(va).getTime() : 0;
       vb = vb ? new Date(vb).getTime() : 0;
     }
-
-    // Nulls go last
     if (va == null && vb == null) return 0;
     if (va == null) return 1;
     if (vb == null) return -1;
-
-    if (typeof va === 'string') {
+    if (typeof va === 'string')
       return mult * va.localeCompare(vb);
-    }
     return mult * (va - vb);
   });
 
@@ -382,9 +340,9 @@ function renderLoans(loans, page) {
   if (pageLoans.length === 0) {
     grid.innerHTML = `
       <div class="empty-state"
-        style="grid-column: 1 / -1;">
-        <div class="emoji">🔍</div>
-        <p>No loans match your filters.</p>
+        style="grid-column:1/-1">
+        <div class="emoji">⊘</div>
+        <p>No loans match current filters</p>
       </div>`;
     return;
   }
@@ -397,125 +355,126 @@ function renderLoans(loans, page) {
 function renderLoanCard(loan, index) {
   const rate = loan.interestRate || 0;
   const priority = loan.priority || 'LOW';
-  const priorityEmoji =
-    priority === 'VERY_HIGH' ? '🔥' :
-    priority === 'MEDIUM' ? '🟡' : '⚪';
-  const priorityText =
-    priority === 'VERY_HIGH' ? 'Very High' :
-    priority === 'MEDIUM' ? 'Medium' : 'Low';
+  const funded = loan.fundedPercent || 0;
 
   // Progress bar class
-  const funded = loan.fundedPercent || 0;
-  let progressClass = 'low';
-  if (funded >= 100) progressClass = 'full';
-  else if (funded >= 76) progressClass = 'high';
-  else if (funded >= 51) progressClass = 'mid';
+  let barClass = 'low';
+  if (funded >= 100) barClass = 'full';
+  else if (funded >= 76) barClass = 'high';
+  else if (funded >= 51) barClass = 'mid';
 
-  // Rate color
-  let rateColor = 'var(--priority-low)';
-  if (rate >= 70) rateColor = 'var(--accent-red)';
-  else if (rate >= 50) {
-    rateColor = 'var(--accent-amber)';
-  }
+  // Animation delay
+  const delay = (index % LOANS_PER_PAGE) * 25;
 
-  // Animation delay for staggered entrance
-  const delay = (index % LOANS_PER_PAGE) * 30;
+  const url = loan.loanUrl
+    || `https://www.i2ifunding.com/invest/\
+loan-detail/${loan.loanId}`;
 
-  const loanUrl = loan.loanUrl
-    || `https://www.i2ifunding.com/invest/loan-detail/${loan.loanId}`;
+  // Credit display
+  const creditDisplay =
+    loan.creditScore === 'No History'
+      ? 'NEW'
+      : (loan.creditScore || '—');
 
   return `
     <article class="loan-card priority-${priority}"
-      style="animation-delay: ${delay}ms"
+      style="animation-delay:${delay}ms"
       id="loan-${loan.loanId}">
-      <div class="card-header">
-        <span class="priority-badge ${priority}">
-          ${priorityEmoji} ${priorityText}
+
+      <div class="card-eyebrow">
+        <span class="priority-indicator ${priority}">
+          ${priority === 'VERY_HIGH'
+            ? '<span class="pulse-dot"></span>' : ''}
+          ${priority === 'VERY_HIGH' ? 'VERY HIGH'
+            : priority}
         </span>
-        <span class="yield-score">
-          Score: ${loan.yieldScore || 0}/100
+        <span class="yield-badge">
+          SCORE ${loan.yieldScore || 0}
         </span>
       </div>
-      <div class="interest-rate"
-        style="color: ${rateColor}">
-        ${rate}%<span class="unit">p.a.</span>
+
+      <div class="card-rate">
+        <span class="rate-value">${rate}</span>
+        <span class="rate-unit">% p.a.</span>
       </div>
+
       <div class="card-divider"></div>
-      <div class="card-details">
-        <div class="detail-item">
-          <span class="emoji">📍</span>
-          <span class="value">
-            ${loan.location || '—'}
-          </span>
-        </div>
-        <div class="detail-item">
-          <span class="emoji">🎂</span>
-          <span class="value">
-            Age: ${loan.age || '—'}
-          </span>
-        </div>
-        <div class="detail-item">
-          <span class="emoji">💰</span>
-          <span class="value">
+
+      <div class="card-meta">
+        <div class="meta-row">
+          <span class="meta-label">Amount</span>
+          <span class="meta-value">
             ${formatCurrency(loan.loanAmount)}
           </span>
         </div>
-        <div class="detail-item">
-          <span class="emoji">📅</span>
-          <span class="value">
+        <div class="meta-row">
+          <span class="meta-label">Credit</span>
+          <span class="meta-value">
+            ${creditDisplay}
+          </span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">Location</span>
+          <span class="meta-value">
+            ${loan.location || '—'}
+          </span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">Tenure</span>
+          <span class="meta-value">
             ${loan.tenure || '—'}
           </span>
         </div>
-        <div class="detail-item">
-          <span class="emoji">📊</span>
-          <span class="value">
-            Credit: ${loan.creditScore || '—'}
+        <div class="meta-row">
+          <span class="meta-label">Risk</span>
+          <span class="meta-value">
+            ${loan.riskCategory || '—'}
           </span>
         </div>
-        <div class="detail-item">
-          <span class="emoji">🏢</span>
-          <span class="value">
-            ${loan.product || '—'}
+        <div class="meta-row">
+          <span class="meta-label">Income</span>
+          <span class="meta-value">
+            ${formatCurrency(loan.monthlyIncome)}
           </span>
         </div>
-        <div class="detail-item">
-          <span class="emoji">⚠️</span>
-          <span class="value">
-            Risk: ${loan.riskCategory || '—'}
-          </span>
-        </div>
-        <div class="detail-item">
-          <span class="emoji">💼</span>
-          <span class="value">
+        <div class="meta-row">
+          <span class="meta-label">Employment</span>
+          <span class="meta-value">
             ${loan.employmentType || '—'}
           </span>
         </div>
+        <div class="meta-row">
+          <span class="meta-label">Purpose</span>
+          <span class="meta-value">
+            ${loan.purpose || '—'}
+          </span>
+        </div>
       </div>
-      <div class="card-divider"></div>
-      <div class="funding-section">
-        <div class="funding-header">
-          <span>Funding Progress</span>
+
+      <div class="funding-bar">
+        <div class="bar-header">
+          <span>FUNDED</span>
           <span>${funded.toFixed(1)}%</span>
         </div>
-        <div class="progress-track">
-          <div class="progress-fill ${progressClass}"
-            style="width: ${Math.min(funded, 100)}%">
+        <div class="bar-track">
+          <div class="bar-fill ${barClass}"
+            style="width:${Math.min(funded, 100)}%">
           </div>
         </div>
-        <div class="funding-amounts">
+        <div class="bar-amounts">
           <span>
             ${formatCurrency(loan.amountFunded)}
-            funded
           </span>
           <span>
             ${formatCurrency(loan.amountLeft)} left
           </span>
         </div>
       </div>
-      <a class="card-link"
-        href="${loanUrl}"
+
+      <a class="card-action"
+        href="${url}"
         target="_blank" rel="noopener">
-        View on i2iFunding →
+        VIEW DETAILS →
       </a>
     </article>`;
 }
@@ -525,89 +484,75 @@ function renderLoanCard(loan, index) {
    ================================================ */
 
 function renderPagination(totalLoans) {
-  const container = document.getElementById(
-    'pagination'
-  );
+  const c = document.getElementById('pagination');
   const totalPages = Math.ceil(
     totalLoans / LOANS_PER_PAGE
   );
 
-  if (totalPages <= 1) {
-    container.innerHTML = '';
-    return;
-  }
+  if (totalPages <= 1) { c.innerHTML = ''; return; }
 
   let html = '';
 
-  // Previous button
   html += `<button class="page-btn"
     id="page-prev"
     ${currentPage <= 1 ? 'disabled' : ''}
     onclick="goToPage(${currentPage - 1})">
-    ← Prev
+    ←
   </button>`;
 
-  // Page numbers with ellipsis
   const maxVisible = 7;
-  let startPage = Math.max(
+  let startP = Math.max(
     1, currentPage - Math.floor(maxVisible / 2)
   );
-  let endPage = Math.min(
-    totalPages, startPage + maxVisible - 1
+  let endP = Math.min(
+    totalPages, startP + maxVisible - 1
   );
-  if (endPage - startPage < maxVisible - 1) {
-    startPage = Math.max(
-      1, endPage - maxVisible + 1
-    );
+  if (endP - startP < maxVisible - 1) {
+    startP = Math.max(1, endP - maxVisible + 1);
   }
 
-  if (startPage > 1) {
+  if (startP > 1) {
     html += `<button class="page-btn"
       onclick="goToPage(1)">1</button>`;
-    if (startPage > 2) {
+    if (startP > 2) {
       html += `<span class="page-btn"
         style="border:none;cursor:default">
-        …
-      </span>`;
+        ⋯</span>`;
     }
   }
 
-  for (let i = startPage; i <= endPage; i++) {
+  for (let i = startP; i <= endP; i++) {
     html += `<button class="page-btn
       ${i === currentPage ? 'active' : ''}"
       onclick="goToPage(${i})">${i}</button>`;
   }
 
-  if (endPage < totalPages) {
-    if (endPage < totalPages - 1) {
+  if (endP < totalPages) {
+    if (endP < totalPages - 1) {
       html += `<span class="page-btn"
         style="border:none;cursor:default">
-        …
-      </span>`;
+        ⋯</span>`;
     }
     html += `<button class="page-btn"
       onclick="goToPage(${totalPages})">
-      ${totalPages}
-    </button>`;
+      ${totalPages}</button>`;
   }
 
-  // Next button
   html += `<button class="page-btn"
     id="page-next"
     ${currentPage >= totalPages ? 'disabled' : ''}
     onclick="goToPage(${currentPage + 1})">
-    Next →
+    →
   </button>`;
 
-  container.innerHTML = html;
+  c.innerHTML = html;
 }
 
-// Global function for onclick handlers
 window.goToPage = function (page) {
-  const totalPages = Math.ceil(
+  const tp = Math.ceil(
     filteredLoans.length / LOANS_PER_PAGE
   );
-  if (page < 1 || page > totalPages) return;
+  if (page < 1 || page > tp) return;
   currentPage = page;
   renderLoans(filteredLoans, currentPage);
   renderPagination(filteredLoans.length);
@@ -625,41 +570,61 @@ function renderCharts(loans) {
   renderLocationChart(loans);
 }
 
-function getChartTextColor() {
-  const theme = document.documentElement
+function chartTextColor() {
+  const t = document.documentElement
     .getAttribute('data-theme');
-  return theme === 'light'
-    ? '#4a4a5e' : '#a0a0b0';
+  return t === 'light' ? '#5a5a60' : '#8a8b8e';
 }
 
-function getChartGridColor() {
-  const theme = document.documentElement
+function chartGridColor() {
+  const t = document.documentElement
     .getAttribute('data-theme');
-  return theme === 'light'
-    ? '#e0e0e8' : '#2a2a3e';
+  return t === 'light'
+    ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)';
 }
 
-function chartDefaults() {
+function chartOpts() {
   return {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
       legend: {
-        labels: { color: getChartTextColor() },
+        labels: {
+          color: chartTextColor(),
+          font: { family: "'DM Sans'" },
+        },
       },
     },
     scales: {
       x: {
-        ticks: { color: getChartTextColor() },
-        grid: { color: getChartGridColor() },
+        ticks: {
+          color: chartTextColor(),
+          font: {
+            family: "'JetBrains Mono'",
+            size: 10,
+          },
+        },
+        grid: { color: chartGridColor() },
       },
       y: {
-        ticks: { color: getChartTextColor() },
-        grid: { color: getChartGridColor() },
+        ticks: {
+          color: chartTextColor(),
+          font: {
+            family: "'JetBrains Mono'",
+            size: 10,
+          },
+        },
+        grid: { color: chartGridColor() },
       },
     },
   };
 }
+
+// Gold-toned chart palette
+const CHART_COLORS = [
+  '#4a4b50', '#5f9fd4', '#c9a962',
+  '#ffa502', '#ff6348', '#ff4757',
+];
 
 function renderRateChart(loans) {
   const ctx = document.getElementById(
@@ -667,17 +632,17 @@ function renderRateChart(loans) {
   ).getContext('2d');
 
   const buckets = {
-    '<20%': 0, '20-39%': 0, '40-49%': 0,
-    '50-69%': 0, '70-84%': 0, '85%+': 0,
+    '<20%': 0, '20–39%': 0, '40–49%': 0,
+    '50–69%': 0, '70–99%': 0, '100%+': 0,
   };
   for (const l of loans) {
     const r = l.interestRate || 0;
     if (r < 20) buckets['<20%']++;
-    else if (r < 40) buckets['20-39%']++;
-    else if (r < 50) buckets['40-49%']++;
-    else if (r < 70) buckets['50-69%']++;
-    else if (r < 85) buckets['70-84%']++;
-    else buckets['85%+']++;
+    else if (r < 40) buckets['20–39%']++;
+    else if (r < 50) buckets['40–49%']++;
+    else if (r < 70) buckets['50–69%']++;
+    else if (r < 100) buckets['70–99%']++;
+    else buckets['100%+']++;
   }
 
   if (charts.rate) charts.rate.destroy();
@@ -688,19 +653,14 @@ function renderRateChart(loans) {
       datasets: [{
         label: 'Loans',
         data: Object.values(buckets),
-        backgroundColor: [
-          '#6b7280', '#3b82f6', '#8b5cf6',
-          '#f59e0b', '#ff6b35', '#ff4444',
-        ],
-        borderRadius: 6,
+        backgroundColor: CHART_COLORS,
+        borderRadius: 4,
         borderSkipped: false,
       }],
     },
     options: {
-      ...chartDefaults(),
-      plugins: {
-        legend: { display: false },
-      },
+      ...chartOpts(),
+      plugins: { legend: { display: false } },
     },
   });
 }
@@ -711,19 +671,19 @@ function renderCreditChart(loans) {
   ).getContext('2d');
 
   const buckets = {
-    'No History': 0, '300-499': 0,
-    '500-599': 0, '600-699': 0,
-    '700-799': 0, '800+': 0,
+    'No History': 0, '300–499': 0,
+    '500–599': 0, '600–699': 0,
+    '700–799': 0, '800+': 0,
   };
   for (const l of loans) {
     const cs = l.creditScoreNumeric;
     const csStr = l.creditScore || '';
-    if (cs === null || /no history/i.test(csStr)) {
+    if (cs === null || /no.?history/i.test(csStr)) {
       buckets['No History']++;
-    } else if (cs < 500) buckets['300-499']++;
-    else if (cs < 600) buckets['500-599']++;
-    else if (cs < 700) buckets['600-699']++;
-    else if (cs < 800) buckets['700-799']++;
+    } else if (cs < 500) buckets['300–499']++;
+    else if (cs < 600) buckets['500–599']++;
+    else if (cs < 700) buckets['600–699']++;
+    else if (cs < 800) buckets['700–799']++;
     else buckets['800+']++;
   }
 
@@ -736,18 +696,16 @@ function renderCreditChart(loans) {
         label: 'Loans',
         data: Object.values(buckets),
         backgroundColor: [
-          '#6b7280', '#ef4444', '#f97316',
-          '#f59e0b', '#10b981', '#3b82f6',
+          '#8a8b8e', '#ff4757', '#ff6348',
+          '#ffa502', '#2ed573', '#5f9fd4',
         ],
-        borderRadius: 6,
+        borderRadius: 4,
         borderSkipped: false,
       }],
     },
     options: {
-      ...chartDefaults(),
-      plugins: {
-        legend: { display: false },
-      },
+      ...chartOpts(),
+      plugins: { legend: { display: false } },
     },
   });
 }
@@ -777,23 +735,27 @@ function renderFundingChart(loans) {
       datasets: [{
         data: Object.values(buckets),
         backgroundColor: [
-          '#3b82f6', '#10b981',
-          '#f59e0b', '#ff4444',
+          '#5f9fd4', '#c9a962',
+          '#ffa502', '#ff4757',
         ],
         borderWidth: 0,
-        hoverOffset: 8,
+        hoverOffset: 6,
       }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      cutout: '60%',
+      cutout: '65%',
       plugins: {
         legend: {
           position: 'bottom',
           labels: {
-            color: getChartTextColor(),
-            padding: 16,
+            color: chartTextColor(),
+            padding: 14,
+            font: {
+              family: "'JetBrains Mono'",
+              size: 10,
+            },
           },
         },
       },
@@ -806,7 +768,6 @@ function renderLocationChart(loans) {
     'chart-location'
   ).getContext('2d');
 
-  // Count by location, take top 10
   const counts = {};
   for (const l of loans) {
     const loc = l.location || 'Unknown';
@@ -824,17 +785,15 @@ function renderLocationChart(loans) {
       datasets: [{
         label: 'Loans',
         data: sorted.map((s) => s[1]),
-        backgroundColor: '#ff6b35',
-        borderRadius: 6,
+        backgroundColor: '#c9a962',
+        borderRadius: 4,
         borderSkipped: false,
       }],
     },
     options: {
-      ...chartDefaults(),
+      ...chartOpts(),
       indexAxis: 'y',
-      plugins: {
-        legend: { display: false },
-      },
+      plugins: { legend: { display: false } },
     },
   });
 }
@@ -844,7 +803,7 @@ function renderLocationChart(loans) {
    ================================================ */
 
 function initFilters() {
-  // Toggle filter panel
+  // Toggle
   const toggleBtn = document.getElementById(
     'filter-toggle'
   );
@@ -855,10 +814,10 @@ function initFilters() {
     panel.classList.toggle('open');
     toggleBtn.textContent = panel.classList
       .contains('open')
-      ? '🔼 Filters' : '🔽 Filters';
+      ? '△ FILTERS' : '▽ FILTERS';
   });
 
-  // Interest rate range
+  // Rate range
   const rateMin = document.getElementById(
     'filter-rate-min'
   );
@@ -872,23 +831,24 @@ function initFilters() {
   });
   rateMax.addEventListener('input', () => {
     filters.interestRateMax =
-      parseFloat(rateMax.value) || 100;
+      parseFloat(rateMax.value) || 200;
     runPipeline();
   });
 
-  // Rate presets
+  // Presets
   document.querySelectorAll('.btn-preset')
     .forEach((btn) => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.btn-preset')
-          .forEach((b) => b.classList.remove('active'));
+          .forEach((b) =>
+            b.classList.remove('active'));
         btn.classList.add('active');
         const min = parseFloat(
           btn.dataset.min
         ) || 0;
         const max = parseFloat(
           btn.dataset.max
-        ) || 100;
+        ) || 200;
         filters.interestRateMin = min;
         filters.interestRateMax = max;
         rateMin.value = min;
@@ -898,15 +858,15 @@ function initFilters() {
     });
 
   // Priority checkboxes
-  const priorityCheckboxes = [
+  const pIds = [
     'filter-priority-very-high',
     'filter-priority-medium',
     'filter-priority-low',
   ];
-  for (const id of priorityCheckboxes) {
+  for (const id of pIds) {
     document.getElementById(id)
       .addEventListener('change', () => {
-        filters.priorities = priorityCheckboxes
+        filters.priorities = pIds
           .map((cid) =>
             document.getElementById(cid)
           )
@@ -916,65 +876,65 @@ function initFilters() {
       });
   }
 
-  // Credit score dropdown
+  // Credit
   document.getElementById('filter-credit')
     .addEventListener('change', (e) => {
       filters.creditScore = e.target.value;
       runPipeline();
     });
 
-  // Location search
-  const locInput = document.getElementById(
+  // Location
+  const locIn = document.getElementById(
     'filter-location'
   );
-  locInput.addEventListener(
+  locIn.addEventListener(
     'input',
     debounce(() => {
-      filters.location = locInput.value;
+      filters.location = locIn.value;
       runPipeline();
     }, 250)
   );
 
-  // Product dropdown
+  // Product
   document.getElementById('filter-product')
     .addEventListener('change', (e) => {
       filters.product = e.target.value;
       runPipeline();
     });
 
-  // Funding remaining slider
-  const fundingSlider = document.getElementById(
+  // Funding slider
+  const slider = document.getElementById(
     'filter-funding'
   );
-  const fundingLabel = document.getElementById(
+  const sliderLabel = document.getElementById(
     'funding-remaining-label'
   );
-  fundingSlider.addEventListener('input', () => {
-    const val = parseInt(fundingSlider.value);
-    filters.fundingRemainingMin = val;
-    fundingLabel.textContent = val + '%';
+  slider.addEventListener('input', () => {
+    const v = parseInt(slider.value);
+    filters.fundingRemainingMin = v;
+    sliderLabel.textContent = v + '%';
     runPipeline();
   });
 
-  // Reset button
+  // Reset
   document.getElementById('filter-reset')
     .addEventListener('click', resetFilters);
 
-  // Sort dropdown
+  // Sort
   document.getElementById('sort-select')
     .addEventListener('change', (e) => {
       currentSort = e.target.value;
       runPipeline();
     });
 
-  // Global search
-  const searchInput = document.getElementById(
+  // Search
+  const searchIn = document.getElementById(
     'search-input'
   );
-  searchInput.addEventListener(
+  searchIn.addEventListener(
     'input',
     debounce(() => {
-      filters.searchQuery = searchInput.value;
+      filters.searchQuery = searchIn.value;
       runPipeline();
     }, 250)
   );
@@ -982,7 +942,7 @@ function initFilters() {
 
 function resetFilters() {
   filters.interestRateMin = 0;
-  filters.interestRateMax = 100;
+  filters.interestRateMax = 200;
   filters.priorities = [
     'VERY_HIGH', 'MEDIUM', 'LOW',
   ];
@@ -992,13 +952,12 @@ function resetFilters() {
   filters.fundingRemainingMin = 0;
   filters.searchQuery = '';
 
-  // Reset UI elements
   document.getElementById(
     'filter-rate-min'
   ).value = 0;
   document.getElementById(
     'filter-rate-max'
-  ).value = 100;
+  ).value = 200;
   document.getElementById(
     'filter-priority-very-high'
   ).checked = true;
@@ -1027,7 +986,6 @@ function resetFilters() {
     'search-input'
   ).value = '';
 
-  // Reset presets
   document.querySelectorAll('.btn-preset')
     .forEach((b) => b.classList.remove('active'));
   document.getElementById('preset-all')
@@ -1046,32 +1004,28 @@ function initTheme() {
     document.documentElement
       .setAttribute('data-theme', saved);
   }
-  updateThemeButton();
-
+  updateThemeBtn();
   document.getElementById('theme-toggle')
-    .addEventListener('click', toggleDarkMode);
+    .addEventListener('click', toggleTheme);
 }
 
-function toggleDarkMode() {
+function toggleTheme() {
   const html = document.documentElement;
-  const current = html.getAttribute('data-theme');
-  const next = current === 'light'
-    ? 'dark' : 'light';
+  const cur = html.getAttribute('data-theme');
+  const next = cur === 'light' ? 'dark' : 'light';
   html.setAttribute('data-theme', next);
   localStorage.setItem('theme', next);
-  updateThemeButton();
-
-  // Redraw charts with new colors
+  updateThemeBtn();
   renderCharts(filteredLoans);
 }
 
-function updateThemeButton() {
+function updateThemeBtn() {
   const btn = document.getElementById(
     'theme-toggle'
   );
   const theme = document.documentElement
     .getAttribute('data-theme');
-  btn.textContent = theme === 'light' ? '☀️' : '🌙';
+  btn.textContent = theme === 'light' ? '☀' : '☾';
 }
 
 /* ================================================
@@ -1084,22 +1038,19 @@ function initAutoRefresh() {
     'refresh-countdown'
   );
 
-  if (countdownInterval) {
+  if (countdownInterval)
     clearInterval(countdownInterval);
-  }
-  if (refreshInterval) {
+  if (refreshInterval)
     clearInterval(refreshInterval);
-  }
 
   countdownInterval = setInterval(() => {
     refreshCountdown--;
-    if (refreshCountdown <= 0) {
+    if (refreshCountdown <= 0)
       refreshCountdown = 300;
-    }
-    const min = Math.floor(refreshCountdown / 60);
-    const sec = refreshCountdown % 60;
+    const m = Math.floor(refreshCountdown / 60);
+    const s = refreshCountdown % 60;
     el.textContent =
-      `↻ ${min}:${String(sec).padStart(2, '0')}`;
+      `↻ ${m}:${String(s).padStart(2, '0')}`;
   }, 1000);
 
   refreshInterval = setInterval(() => {

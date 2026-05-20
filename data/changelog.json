@@ -38,15 +38,19 @@
       "notificationsSent": {}
     },
     {
-      "runId": "run_1779274797535",
-      "startedAt": "2026-05-20T10:59:57.535Z",
-      "completedAt": "2026-05-20T11:00:25.250Z",
-      "duration_ms": 27715,
-      "loansFound": 9,
-      "newLoans": 0,
-      "loansArchived": 2,
+      "runId": "run_1779275498638",
+      "startedAt": "2026-05-20T11:11:38.638Z",
+      "completedAt": "2026-05-20T11:12:16.384Z",
+      "duration_ms": 37746,
+      "loansFound": 16,
+      "newLoans": 10,
+      "loansArchived": 5,
       "errors": [],
-      "notificationsSent": {}
+      "notificationsSent": {
+        "telegram": false,
+        "email": false,
+        "discord": false
+      }
     }
   ]
 }

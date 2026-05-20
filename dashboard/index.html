@@ -8,40 +8,43 @@
     i2i Yield Watch — High-Yield Loan Intelligence
   </title>
   <meta name="description"
-    content="Real-time dashboard tracking high-yield
-    lending opportunities on i2iFunding. Auto-updated
-    every 15 minutes.">
-  <meta name="theme-color" content="#0a0a0f">
+    content="Real-time command center tracking
+    high-yield lending opportunities on i2iFunding.
+    Auto-updated every 15 minutes.">
+  <meta name="theme-color" content="#050508">
   <meta property="og:title"
-    content="i2i Yield Watch">
+    content="i2i Yield Watch — Command Center">
   <meta property="og:description"
     content="Automated high-yield loan intelligence
     platform for i2iFunding.">
   <meta property="og:type" content="website">
+
+  <!-- Fonts: Syne (display) + DM Sans (body)
+       + JetBrains Mono (data) -->
   <link rel="preconnect"
     href="https://fonts.googleapis.com">
   <link rel="preconnect"
     href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Syne:wght@400..800&display=swap">
+
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-  <!-- Header -->
+  <!-- ======= Header ======= -->
   <header class="header">
     <div class="container header-inner">
       <div class="header-left">
-        <h1 class="logo">i2i Yield Watch 🔍</h1>
+        <h1 class="logo">Yield Watch</h1>
       </div>
       <div class="header-right">
         <span class="last-updated"
-          id="last-updated">Loading...</span>
+          id="last-updated">INITIALIZING...</span>
         <span class="refresh-countdown"
           id="refresh-countdown"></span>
         <button class="theme-toggle"
           id="theme-toggle"
-          aria-label="Toggle dark/light mode"
+          aria-label="Toggle theme"
           title="Toggle theme">🌙</button>
       </div>
     </div>
@@ -49,54 +52,48 @@
 
   <main class="container">
 
-    <!-- Stats Bar -->
+    <!-- ======= Stats ======= -->
     <section class="stats-bar" id="stats-bar">
       <div class="stat-card" id="stat-total">
-        <div class="stat-icon">📊</div>
+        <div class="stat-icon">◉</div>
         <div class="stat-value"
           id="stat-total-value">—</div>
-        <div class="stat-label">Total Active</div>
+        <div class="stat-label">Active</div>
       </div>
       <div class="stat-card" id="stat-high">
-        <div class="stat-icon">🔥</div>
+        <div class="stat-icon">▲</div>
         <div class="stat-value"
           id="stat-high-value">—</div>
-        <div class="stat-label">
-          High Priority (≥70%)
-        </div>
+        <div class="stat-label">High Priority</div>
       </div>
       <div class="stat-card" id="stat-avg-rate">
-        <div class="stat-icon">📈</div>
+        <div class="stat-icon">◈</div>
         <div class="stat-value"
           id="stat-avg-rate-value">—</div>
-        <div class="stat-label">
-          Avg Interest Rate
-        </div>
+        <div class="stat-label">Avg Rate</div>
       </div>
       <div class="stat-card" id="stat-avg-score">
-        <div class="stat-icon">⚡</div>
+        <div class="stat-icon">⬡</div>
         <div class="stat-value"
           id="stat-avg-score-value">—</div>
-        <div class="stat-label">
-          Avg Yield Score
-        </div>
+        <div class="stat-label">Avg Score</div>
       </div>
       <div class="stat-card" id="stat-highest">
-        <div class="stat-icon">🏆</div>
+        <div class="stat-icon">⬆</div>
         <div class="stat-value"
           id="stat-highest-value">—</div>
-        <div class="stat-label">Highest Rate</div>
+        <div class="stat-label">Peak Rate</div>
       </div>
     </section>
 
-    <!-- Controls -->
+    <!-- ======= Controls ======= -->
     <section class="controls">
       <button class="filter-toggle-btn"
         id="filter-toggle">
-        🔽 Filters
+        ▽ FILTERS
       </button>
       <div class="search-box">
-        <span class="search-icon">🔎</span>
+        <span class="search-icon">⌕</span>
         <input type="text"
           class="search-input"
           id="search-input"
@@ -113,7 +110,7 @@
           ↓ Highest Credit Score
         </option>
         <option value="fundingRemaining_desc">
-          ↓ Most Funding Remaining
+          ↓ Most Funding Left
         </option>
         <option value="madeLiveOn_desc">
           ↓ Newest First
@@ -122,42 +119,43 @@
           ↓ Loan Amount
         </option>
       </select>
-      <span class="loan-count" id="loan-count">
-      </span>
+      <span class="loan-count"
+        id="loan-count"></span>
     </section>
 
-    <!-- Filter Panel -->
-    <section class="filter-panel" id="filter-panel">
+    <!-- ======= Filter Panel ======= -->
+    <section class="filter-panel"
+      id="filter-panel">
       <div class="filter-presets">
         <button class="btn btn-preset"
           id="preset-70"
-          data-min="70" data-max="100">70%+</button>
+          data-min="70" data-max="200">70%+</button>
         <button class="btn btn-preset"
           id="preset-50"
-          data-min="50" data-max="100">50%+</button>
+          data-min="50" data-max="200">50%+</button>
         <button class="btn btn-preset active"
           id="preset-all"
-          data-min="0" data-max="100">All</button>
+          data-min="0" data-max="200">ALL</button>
       </div>
       <div class="filter-grid">
         <div class="filter-group">
           <label class="filter-label">
-            Interest Rate Range
+            Rate Range
           </label>
           <div class="filter-range">
             <input type="number"
               class="filter-input"
               id="filter-rate-min"
-              min="0" max="100"
+              min="0" max="200"
               value="0" placeholder="Min">
             <span style="color:var(--text-muted)">
-              –
+              —
             </span>
             <input type="number"
               class="filter-input"
               id="filter-rate-max"
-              min="0" max="100"
-              value="100" placeholder="Max">
+              min="0" max="200"
+              value="200" placeholder="Max">
           </div>
         </div>
         <div class="filter-group">
@@ -169,19 +167,19 @@
               <input type="checkbox"
                 id="filter-priority-very-high"
                 value="VERY_HIGH" checked>
-              🔥 Very High
+              Very High
             </label>
             <label class="filter-checkbox">
               <input type="checkbox"
                 id="filter-priority-medium"
                 value="MEDIUM" checked>
-              🟡 Medium
+              Medium
             </label>
             <label class="filter-checkbox">
               <input type="checkbox"
                 id="filter-priority-low"
                 value="LOW" checked>
-              ⚪ Low
+              Low
             </label>
           </div>
         </div>
@@ -198,8 +196,12 @@
             <option value="below_550">
               Below 550
             </option>
-            <option value="550_699">550 – 699</option>
-            <option value="700_749">700 – 749</option>
+            <option value="550_699">
+              550 – 699
+            </option>
+            <option value="700_749">
+              700 – 749
+            </option>
             <option value="750_plus">750+</option>
           </select>
         </div>
@@ -210,7 +212,7 @@
           <input type="text"
             class="filter-input"
             id="filter-location"
-            placeholder="Type city name...">
+            placeholder="City name...">
         </div>
         <div class="filter-group">
           <label class="filter-label">
@@ -218,12 +220,12 @@
           </label>
           <select class="filter-select"
             id="filter-product">
-            <option value="all">All Products</option>
+            <option value="all">All</option>
           </select>
         </div>
         <div class="filter-group">
           <label class="filter-label">
-            Min Funding Remaining:
+            Min Funding Left:
             <span id="funding-remaining-label">
               0%
             </span>
@@ -235,28 +237,28 @@
       </div>
       <div class="filter-actions">
         <button class="btn btn-reset"
-          id="filter-reset">Reset Filters</button>
+          id="filter-reset">RESET</button>
       </div>
     </section>
 
-    <!-- Loans Grid -->
+    <!-- ======= Loans ======= -->
     <section id="loans-container">
       <div class="loading" id="loading">
         <div class="spinner"></div>
         <span class="loading-text">
-          Loading loan data...
+          Scanning loan market...
         </span>
       </div>
-      <div class="loans-grid" id="loans-grid">
-      </div>
+      <div class="loans-grid"
+        id="loans-grid"></div>
     </section>
 
-    <!-- Pagination -->
+    <!-- ======= Pagination ======= -->
     <nav class="pagination" id="pagination"></nav>
 
-    <!-- Charts -->
+    <!-- ======= Charts ======= -->
     <section class="charts-section">
-      <h2 class="charts-title">📊 Analytics</h2>
+      <h2 class="section-title">Analytics</h2>
       <div class="charts-grid">
         <div class="chart-card">
           <h3>Interest Rate Distribution</h3>
@@ -287,15 +289,14 @@
 
   </main>
 
-  <!-- Footer -->
+  <!-- ======= Footer ======= -->
   <footer class="footer">
     <div class="container">
       <p>
-        i2i Yield Watch — Auto-scraped every
-        15 minutes |
+        YIELD WATCH · AUTO-SCRAPED EVERY 15 MIN ·
         <a href="https://github.com/chirag127/i2i-yield-watch"
           target="_blank" rel="noopener">
-          GitHub
+          GITHUB
         </a>
       </p>
     </div>
