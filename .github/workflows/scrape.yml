@@ -92,6 +92,10 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v6
 
+      - name: Copy data into dashboard
+        run: |
+          cp -r data dashboard/data
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

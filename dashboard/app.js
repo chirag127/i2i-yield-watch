@@ -99,8 +99,10 @@ async function loadData() {
     grid.innerHTML = '';
 
     const res = await fetch(
+      './data/active_loans.json'
+    ).catch(() => fetch(
       '../data/active_loans.json'
-    );
+    ));
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
