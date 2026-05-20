@@ -17,21 +17,38 @@ function formatLoanLine(loan) {
     : 'N/A';
   const score = loan.yieldScore || 0;
   const credit = loan.creditScore || 'N/A';
-  const remaining = loan.fundingRemaining != null
-    ? `${loan.fundingRemaining}%`
+  const remaining = loan.amountLeft != null
+    ? `₹${loan.amountLeft.toLocaleString('en-IN')}`
     : 'N/A';
-  const product = loan.product || '';
+  const fundedPercent = loan.fundedPercent != null
+    ? `${loan.fundedPercent.toFixed(1)}%`
+    : 'N/A';
+  const product = loan.product || 'N/A';
+  const name = loan.name || 'N/A';
+  const age = loan.age || 'N/A';
+  const resType = loan.residenceType || 'N/A';
+  const empType = loan.employmentType || 'N/A';
+  const income = loan.monthlyIncome
+    ? `₹${loan.monthlyIncome.toLocaleString('en-IN')}`
+    : 'N/A';
+  const profession = loan.professionName || loan.businessName || 'N/A';
+  const tenure = loan.tenure || 'N/A';
+  const purpose = loan.purpose || 'N/A';
+  const risk = loan.riskCategory || 'N/A';
 
   const url = (loan.borrowerRef && loan.loanId)
     ? `https://www.i2ifunding.com/borrower/listing/public-profile/${loan.borrowerRef}/${loan.loanId}`
     : (loan.loanUrl || `https://www.i2ifunding.com/invest/loan-detail/${loan.loanId}`);
 
   return (
-    `🔥 <a href="${url}"><b>${rate}% p.a.</b></a> | ${loc} `
-    + `| ${amt} | Score: ${score}\n`
-    + `   Credit: ${credit} `
-    + `| ${remaining} remaining `
-    + `| ${product}`
+    `🔥 <b><a href="${url}">${rate}% p.a.</a></b> (Yield Score: <b>${score}/100</b>)\n`
+    + `• <b>Borrower</b>: ${name} (Age: ${age}, Res: ${resType})\n`
+    + `• <b>Emp</b>: ${empType} (${profession}) | <b>Income</b>: ${income}\n`
+    + `• <b>Loan</b>: ${amt} | <b>Purpose</b>: ${purpose}\n`
+    + `• <b>Terms</b>: ${tenure} | <b>Product</b>: ${product}\n`
+    + `• <b>Credit/Risk</b>: Score ${credit} | Risk ${risk}\n`
+    + `• <b>Status</b>: ${fundedPercent} funded (${remaining} remaining)\n`
+    + `• <b>Location</b>: ${loc}`
   );
 }
 

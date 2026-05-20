@@ -2,7 +2,7 @@
 
 > **Automated high-yield loan intelligence platform
 > for i2iFunding.** Scrapes public borrower listings
-> every 15 minutes, scores loans by yield potential,
+> every 10 minutes, scores loans by yield potential,
 > and sends instant multi-channel notifications for
 > new opportunities.
 
@@ -11,7 +11,7 @@
 ## ✨ Features
 
 - 🤖 **Fully Automated** — Scrapes i2iFunding
-  every 15 minutes via GitHub Actions
+  every 10 minutes via GitHub Actions
 - 📊 **Live Dashboard** — Premium dark-mode
   dashboard with filters, charts, and search
 - 🔥 **Yield Scoring** — Custom 0–100 opportunity
@@ -54,25 +54,25 @@
 
 ## 📊 Understanding the Yield Score
 
-The **Yield Score** (0–100) is an **opportunity
-score**, not a risk score:
+The **Yield Score** (0–100) is an **opportunity score**, not a risk score. It intentionally favors high-interest rate loans:
 
-| Factor | Weight | Logic |
-|--------|--------|-------|
-| Interest Rate | 40% | Higher = Better |
-| Credit Score | 20% | Higher = Better |
-| Monthly Income | 15% | Higher = Better |
-| Funding Remaining | 15% | More = Better |
-| Loan Amount | 10% | Larger = Better |
+| Factor | Weight | Bounds (Min–Max) | Logic |
+|---|---|---|---|
+| Interest Rate | **55%** | 0% – 200% (No limit) | Higher = Better |
+| Credit Score | **30%** | 300 – 900 | Higher = Better (Null / No History treated neutrally) |
+| Monthly Income | **5%** | ₹0 – ₹20,00,000 | Higher = Better |
+| Funding Remaining | **5%** | 0% – 100% | More left = Better |
+| Loan Amount | **5%** | ₹0 – ₹50,00,000 | Larger = Better |
+
+**Credit Score Neutralization**:
+- If a borrower has **No History** or no credit score grade is available, they are **not penalized** (they receive a neutral `0.5` score component value).
 
 **Priority Levels:**
 - 🔥 **VERY HIGH** — Interest rate ≥ 70% p.a.
 - 🟡 **MEDIUM** — Interest rate 50–69% p.a.
 - ⚪ **LOW** — Interest rate < 50% p.a.
 
-> **Important:** Category X is treated neutrally.
-> High interest rates are never penalized — they
-> are the primary yield signal.
+> **Important:** Category X risk grade is treated neutrally. High interest rates are never penalized — they are the primary yield signal.
 
 ## 🛠️ Setup Guide (Step by Step)
 
@@ -167,7 +167,7 @@ Go to: **Repository** → **Settings** →
    **"i2i Yield Watch — Auto Scraper"** →
    **Run workflow**
 4. After confirming it works, it auto-runs
-   every 15 minutes
+   every 10 minutes
 
 ### Step 8 — Update Dashboard URL Secret
 
@@ -262,7 +262,7 @@ npx serve .
 - Check if the site structure has changed
 
 ### Rate limiting concerns
-- 15-minute intervals are safe for a single page
+- 10-minute intervals are safe for a single page
 - Startup jitter (0–30s) prevents exact timing
 - User agent rotation provides basic stealth
 
