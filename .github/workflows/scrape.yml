@@ -3,7 +3,7 @@ name: i2i Yield Watch — Auto Scraper
 on:
   schedule:
     # Every 15 minutes (public repo = unlimited minutes)
-    - cron: '*/10 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch: # Manual trigger from GitHub UI
 
 permissions:

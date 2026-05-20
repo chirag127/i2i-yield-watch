@@ -2,7 +2,7 @@
 
 > **Automated high-yield loan intelligence platform
 > for i2iFunding.** Scrapes public borrower listings
-> every 10 minutes, scores loans by yield potential,
+> every 15 minutes, scores loans by yield potential,
 > and sends instant multi-channel notifications for
 > new opportunities.
 
@@ -11,7 +11,7 @@
 ## ✨ Features
 
 - 🤖 **Fully Automated** — Scrapes i2iFunding
-  every 10 minutes via GitHub Actions
+  every 15 minutes via GitHub Actions
 - 📊 **Live Dashboard** — Premium dark-mode
   dashboard with filters, charts, and search
 - 🔥 **Yield Scoring** — Custom 0–100 opportunity
@@ -167,7 +167,7 @@ Go to: **Repository** → **Settings** →
    **"i2i Yield Watch — Auto Scraper"** →
    **Run workflow**
 4. After confirming it works, it auto-runs
-   every 10 minutes
+   every 15 minutes
 
 ### Step 8 — Update Dashboard URL Secret
 
@@ -262,7 +262,7 @@ npx serve .
 - Check if the site structure has changed
 
 ### Rate limiting concerns
-- 10-minute intervals are safe for a single page
+- 15-minute intervals are safe for a single page
 - Startup jitter (0–30s) prevents exact timing
 - User agent rotation provides basic stealth
 
