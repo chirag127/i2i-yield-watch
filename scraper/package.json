@@ -1,0 +1,21 @@
+{
+  "name": "i2i-yield-watch-scraper",
+  "version": "1.0.0",
+  "description": "Automated i2iFunding high-yield loan intelligence scraper",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test": "node -e \"const s = require('./scorer'); console.log('Score:', s.calculateYieldScore({interestRate:81.9,creditScoreNumeric:553,monthlyIncome:30000,fundingRemaining:27,loanAmount:16313})); console.log('Priority:', s.getPriority(81.9))\""
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "nodemailer": "^8.0.7",
+    "playwright": "^1.52.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Chirag Singhal",
+  "license": "MIT"
+}

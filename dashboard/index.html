@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0">
+  <title>
+    i2i Yield Watch — High-Yield Loan Intelligence
+  </title>
+  <meta name="description"
+    content="Real-time dashboard tracking high-yield
+    lending opportunities on i2iFunding. Auto-updated
+    every 15 minutes.">
+  <meta name="theme-color" content="#0a0a0f">
+  <meta property="og:title"
+    content="i2i Yield Watch">
+  <meta property="og:description"
+    content="Automated high-yield loan intelligence
+    platform for i2iFunding.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect"
+    href="https://fonts.googleapis.com">
+  <link rel="preconnect"
+    href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="container header-inner">
+      <div class="header-left">
+        <h1 class="logo">i2i Yield Watch 🔍</h1>
+      </div>
+      <div class="header-right">
+        <span class="last-updated"
+          id="last-updated">Loading...</span>
+        <span class="refresh-countdown"
+          id="refresh-countdown"></span>
+        <button class="theme-toggle"
+          id="theme-toggle"
+          aria-label="Toggle dark/light mode"
+          title="Toggle theme">🌙</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- Stats Bar -->
+    <section class="stats-bar" id="stats-bar">
+      <div class="stat-card" id="stat-total">
+        <div class="stat-icon">📊</div>
+        <div class="stat-value"
+          id="stat-total-value">—</div>
+        <div class="stat-label">Total Active</div>
+      </div>
+      <div class="stat-card" id="stat-high">
+        <div class="stat-icon">🔥</div>
+        <div class="stat-value"
+          id="stat-high-value">—</div>
+        <div class="stat-label">
+          High Priority (≥70%)
+        </div>
+      </div>
+      <div class="stat-card" id="stat-avg-rate">
+        <div class="stat-icon">📈</div>
+        <div class="stat-value"
+          id="stat-avg-rate-value">—</div>
+        <div class="stat-label">
+          Avg Interest Rate
+        </div>
+      </div>
+      <div class="stat-card" id="stat-avg-score">
+        <div class="stat-icon">⚡</div>
+        <div class="stat-value"
+          id="stat-avg-score-value">—</div>
+        <div class="stat-label">
+          Avg Yield Score
+        </div>
+      </div>
+      <div class="stat-card" id="stat-highest">
+        <div class="stat-icon">🏆</div>
+        <div class="stat-value"
+          id="stat-highest-value">—</div>
+        <div class="stat-label">Highest Rate</div>
+      </div>
+    </section>
+
+    <!-- Controls -->
+    <section class="controls">
+      <button class="filter-toggle-btn"
+        id="filter-toggle">
+        🔽 Filters
+      </button>
+      <div class="search-box">
+        <span class="search-icon">🔎</span>
+        <input type="text"
+          class="search-input"
+          id="search-input"
+          placeholder="Search location, purpose...">
+      </div>
+      <select class="sort-select" id="sort-select">
+        <option value="interestRate_desc">
+          ↓ Highest Interest Rate
+        </option>
+        <option value="yieldScore_desc">
+          ↓ Best Yield Score
+        </option>
+        <option value="creditScoreNumeric_desc">
+          ↓ Highest Credit Score
+        </option>
+        <option value="fundingRemaining_desc">
+          ↓ Most Funding Remaining
+        </option>
+        <option value="madeLiveOn_desc">
+          ↓ Newest First
+        </option>
+        <option value="loanAmount_desc">
+          ↓ Loan Amount
+        </option>
+      </select>
+      <span class="loan-count" id="loan-count">
+      </span>
+    </section>
+
+    <!-- Filter Panel -->
+    <section class="filter-panel" id="filter-panel">
+      <div class="filter-presets">
+        <button class="btn btn-preset"
+          id="preset-70"
+          data-min="70" data-max="100">70%+</button>
+        <button class="btn btn-preset"
+          id="preset-50"
+          data-min="50" data-max="100">50%+</button>
+        <button class="btn btn-preset active"
+          id="preset-all"
+          data-min="0" data-max="100">All</button>
+      </div>
+      <div class="filter-grid">
+        <div class="filter-group">
+          <label class="filter-label">
+            Interest Rate Range
+          </label>
+          <div class="filter-range">
+            <input type="number"
+              class="filter-input"
+              id="filter-rate-min"
+              min="0" max="100"
+              value="0" placeholder="Min">
+            <span style="color:var(--text-muted)">
+              –
+            </span>
+            <input type="number"
+              class="filter-input"
+              id="filter-rate-max"
+              min="0" max="100"
+              value="100" placeholder="Max">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Priority
+          </label>
+          <div class="filter-checkboxes">
+            <label class="filter-checkbox">
+              <input type="checkbox"
+                id="filter-priority-very-high"
+                value="VERY_HIGH" checked>
+              🔥 Very High
+            </label>
+            <label class="filter-checkbox">
+              <input type="checkbox"
+                id="filter-priority-medium"
+                value="MEDIUM" checked>
+              🟡 Medium
+            </label>
+            <label class="filter-checkbox">
+              <input type="checkbox"
+                id="filter-priority-low"
+                value="LOW" checked>
+              ⚪ Low
+            </label>
+          </div>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Credit Score
+          </label>
+          <select class="filter-select"
+            id="filter-credit">
+            <option value="all">All</option>
+            <option value="no_history">
+              No History
+            </option>
+            <option value="below_550">
+              Below 550
+            </option>
+            <option value="550_699">550 – 699</option>
+            <option value="700_749">700 – 749</option>
+            <option value="750_plus">750+</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Location
+          </label>
+          <input type="text"
+            class="filter-input"
+            id="filter-location"
+            placeholder="Type city name...">
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Product
+          </label>
+          <select class="filter-select"
+            id="filter-product">
+            <option value="all">All Products</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Min Funding Remaining:
+            <span id="funding-remaining-label">
+              0%
+            </span>
+          </label>
+          <input type="range"
+            id="filter-funding"
+            min="0" max="100" value="0">
+        </div>
+      </div>
+      <div class="filter-actions">
+        <button class="btn btn-reset"
+          id="filter-reset">Reset Filters</button>
+      </div>
+    </section>
+
+    <!-- Loans Grid -->
+    <section id="loans-container">
+      <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <span class="loading-text">
+          Loading loan data...
+        </span>
+      </div>
+      <div class="loans-grid" id="loans-grid">
+      </div>
+    </section>
+
+    <!-- Pagination -->
+    <nav class="pagination" id="pagination"></nav>
+
+    <!-- Charts -->
+    <section class="charts-section">
+      <h2 class="charts-title">📊 Analytics</h2>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>Interest Rate Distribution</h3>
+          <div class="chart-wrapper">
+            <canvas id="chart-rate"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>Credit Score Distribution</h3>
+          <div class="chart-wrapper">
+            <canvas id="chart-credit"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>Funding Progress</h3>
+          <div class="chart-wrapper">
+            <canvas id="chart-funding"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>Top Locations</h3>
+          <div class="chart-wrapper">
+            <canvas id="chart-location"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>
+        i2i Yield Watch — Auto-scraped every
+        15 minutes |
+        <a href="https://github.com/chirag127/i2i-yield-watch"
+          target="_blank" rel="noopener">
+          GitHub
+        </a>
+      </p>
+    </div>
+  </footer>
+
+  <!-- Toast Container -->
+  <div class="toast-container"
+    id="toast-container"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

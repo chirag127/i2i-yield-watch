@@ -1,0 +1,102 @@
+name: i2i Yield Watch — Auto Scraper
+
+on:
+  schedule:
+    # Every 15 minutes (public repo = unlimited minutes)
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Manual trigger from GitHub UI
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: scraper
+  cancel-in-progress: true
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: scraper
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: scraper
+        run: npx playwright install chromium --with-deps
+
+      - name: Run scraper
+        working-directory: scraper
+        env:
+          TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMAIL_ENABLED: ${{ secrets.EMAIL_ENABLED }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          DISCORD_ENABLED: ${{ secrets.DISCORD_ENABLED }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          MAX_SHOW_MORE_CLICKS: '150'
+          HIGH_PRIORITY_RATE_THRESHOLD: '70'
+          MEDIUM_PRIORITY_RATE_THRESHOLD: '50'
+        run: node index.js
+        continue-on-error: true
+
+      - name: Commit updated data files
+        run: |
+          git config --local user.email \
+            "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name \
+            "github-actions[bot]"
+          git add data/ dashboard/
+          git diff --quiet && \
+            git diff --staged --quiet || \
+            git commit -m \
+              "chore: auto-scrape $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push
+
+  deploy:
+    needs: scrape
+    runs-on: ubuntu-latest
+    if: always()
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Pull latest changes
+        run: git pull origin main || true
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dashboard
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
