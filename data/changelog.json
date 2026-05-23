@@ -559,6 +559,18 @@
         "email": false,
         "discord": false
       }
+    },
+    {
+      "runId": "run_1779561641681",
+      "startedAt": "2026-05-23T18:40:41.681Z",
+      "completedAt": "2026-05-23T18:42:48.107Z",
+      "loansFound": 0,
+      "newLoans": 0,
+      "loansArchived": 0,
+      "errors": [
+        "All 3 scrape attempts failed. Last error: page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.i2ifunding.com/borrower/listing\", waiting until \"domcontentloaded\"\n"
+      ],
+      "notificationsSent": {}
     }
   ]
 }
