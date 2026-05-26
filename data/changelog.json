@@ -958,6 +958,21 @@
       "loansArchived": 2,
       "errors": [],
       "notificationsSent": {}
+    },
+    {
+      "runId": "run_1779786049711",
+      "startedAt": "2026-05-26T09:00:49.711Z",
+      "completedAt": "2026-05-26T09:01:29.448Z",
+      "duration_ms": 39737,
+      "loansFound": 23,
+      "newLoans": 10,
+      "loansArchived": 2,
+      "errors": [],
+      "notificationsSent": {
+        "telegram": true,
+        "email": false,
+        "discord": false
+      }
     }
   ]
 }
