@@ -83,14 +83,14 @@ jobs:
           git-crypt-key: ${{ secrets.GIT_CRYPT_KEY }}
 
       - name: Write Firebase service account JSON
-        if: ${{ secrets.FIREBASE_SA_JSON != '' }}
         env:
           FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
         run: |
-          set -euo pipefail
-          if [ -n "$FIREBASE_SA_JSON" ]; then
+          if [ -n "${FIREBASE_SA_JSON:-}" ]; then
             printf '%s' "$FIREBASE_SA_JSON" > i2i-yield-watch-sa.json
             echo "Wrote $(wc -c < i2i-yield-watch-sa.json) bytes to i2i-yield-watch-sa.json"
+          else
+            echo "No FIREBASE_SA_JSON secret — using git-crypt-decrypted file"
           fi
 
       - name: Install Playwright Chromium
