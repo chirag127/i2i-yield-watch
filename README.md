@@ -5,11 +5,13 @@
 > every 5 minutes aligned to IST quarter-fives
 > (1:00, 1:05, 1:10, ... 1:55 PM IST, etc.) via a
 > single HTTP call to i2iFunding's own API, scores
-> loans by yield potential, and dispatches a
-> standardized 19-field alert the first time a loan
-> crosses the high-yield threshold (rate > 50%) to
+> loans by yield potential, and dispatches a compact
+> label-free line list the first time a loan crosses
+> the high-yield threshold (rate > 50%) to
 > **Telegram, Gmail, Discord, and ntfy.sh**. Each
-> unique loan is announced exactly once.
+> unique loan is announced exactly once. State lives
+> in **Cloud Firestore** (free, unlimited projects)
+> — no JSON files in the repo, no static data.
 
 [![Auto Scraper](https://github.com/chirag127/i2i-yield-watch/actions/workflows/scrape.yml/badge.svg)](https://github.com/chirag127/i2i-yield-watch/actions/workflows/scrape.yml)
 
@@ -32,7 +34,9 @@
 - 📊 **Live Dashboard** — Premium dark-mode
   dashboard with **Active** and **Archived**
   tabs, month pills, filters, charts, search,
-  keyboard shortcuts, and pagination
+  keyboard shortcuts, and pagination. Reads
+  **directly from Firestore** at runtime — no
+  static JSON, always fresh.
 - 🔥 **Yield Scoring** — Custom 0–100 opportunity
   score (higher interest = better)
 - 🔔 **New-Loan-Only Alerts** — Telegram, Gmail,
@@ -40,29 +44,33 @@
   only for loans with interest rate **strictly
   above 50%** (configurable). Each unique loan
   is **announced exactly once**.
-- 📋 **Standardized 19-Field Format** — Every
-  channel (Telegram, Gmail, Discord, ntfy)
-  renders the same shared 19-field block: 15
-  critical fields always shown + 4 best-effort
-  optional fields silently omitted when missing.
-  No percent symbols in the funding breakdown —
-  only Indian-formatted amounts (`₹1,23,456`).
-- 🔐 **Encrypted Secrets** — `.env` is encrypted
+- 📋 **Label-Free Line List** — Every channel
+  (Telegram, Gmail, Discord, ntfy) renders the
+  same compact 10-line block built once by
+  `formatLoanBlock()`: rate + yield at the top,
+  identity, funding, credit, borrower,
+  employment, income, purpose, date, URL. No
+  field labels, no `%` in the funding breakdown
+  — only Indian-formatted amounts (`₹1,23,456`).
+- 🔐 **Encrypted Secrets** — `.env` AND the
+  Firebase service account JSON are encrypted
   with **git-crypt symmetric mode** and committed
-  to the repo. CI unlocks it with
-  `flydiverny/setup-git-crypt@v5`. No more
-  scattered GitHub Secrets.
+  to the repo. CI unlocks both with
+  `flydiverny/setup-git-crypt@v5` +
+  `GIT_CRYPT_KEY` secret. No scattered GitHub
+  Secrets, no leaked tokens in history.
 - 🏛️ **SOLID Architecture** — Cleanly folderized
   into `core/`, `notifiers/`, `utils/`, `browser/`,
-  and `test/` layers. The 19-field block is built
+  and `test/` layers. The line list is built
   **once** (`formatLoanBlock`) and rendered by all
   four channels, so format changes ripple to every
   channel in one PR.
 - 📁 **Historical Data** — Monthly archives of
-  funded loans, plus a manifest (`index.json`)
-  the dashboard reads for the Archived tab
-- 🆓 **100% Free** — GitHub Actions + Pages, no
-  paid services, no servers
+  funded loans in Firestore, queried per-month
+  from the dashboard's Archived tab
+- 🆓 **100% Free** — GitHub Actions + Pages +
+  Firestore Spark tier, no paid services, no
+  servers
 
 ## 🚀 Live Dashboard
 
@@ -71,18 +79,20 @@
 The dashboard has two views, switched by the
 top-left tab bar:
 
-- **ACTIVE** — every loan currently in
-  `data/active_loans.json`. Includes ALL rates,
-  not just high-yield. Default view.
+- **ACTIVE** — every loan currently in the
+  Firestore `loans` collection with
+  `status == "active"`. Includes ALL rates, not
+  just high-yield. Default view.
 - **ARCHIVED** — every loan from every monthly
-  archive file (`fully_funded_YYYY_MM.json`).
-  Lazy-loaded on first switch; the manifest at
-  `data/archive/index.json` lists all available
-  months.
+  archive in Firestore. Lazy-loaded on first
+  switch; the manifest at `meta/archiveIndex`
+  lists all available months.
 
 Both views share the same filter / search / sort
 controls and the same 50-per-page client-side
-pagination.
+pagination. All data is fetched live from
+Firestore via the Firebase JS SDK — no static
+JSON, always fresh.
 
 ## 📋 How It Works
 
@@ -109,7 +119,7 @@ pagination.
                               ▼
                    ┌─────────────────────┐
                    │ src/core/transform  │  (API/DOM → normal)
-                   │ formatLoanBlock()   │  (one 19-row block)
+                   │ formatLoanBlock()   │  (one 10-line block)
                    └──────────┬──────────┘
                               │
               ┌───────────────┼────────────────┐
@@ -117,15 +127,15 @@ pagination.
         ┌──────────┐   ┌──────────┐    ┌──────────┐
         │ src/core │   │ src/     │    │ src/core │
         │ storage  │   │ notifiers│    │ storage  │
-        │ (loanId  │   │ TG/Email/│    │ archive  │
-        │  dedup)  │   │ Discord/ │    │ (monthly)│
-        │          │   │ ntfy     │    │          │
-        └────┬─────┘   └────┬─────┘    └──────────┘
-             │              │
-             ▼              ▼
+        │ (Firestore│  │ TG/Email/│    │ Firestore│
+        │  +loanId  │  │ Discord/ │    │ archive  │
+        │  dedup)  │   │ ntfy     │    │ (monthly)│
+        └────┬─────┘   └────┬─────┘    └────┬─────┘
+             │              │              │
+             ▼              ▼              ▼
       ┌───────────────┐  ┌──────────┐
-      │  data/ JSON   │  │ Telegram │
-      │ (committed)   │  │  / Gmail │
+      │   Firestore   │  │ Telegram │
+      │  (Spark tier) │  │  / Gmail │
       │               │  │  / Discord│
       │               │  │  / ntfy  │
       └──────┬────────┘  └──────────┘
@@ -134,6 +144,8 @@ pagination.
       ┌───────────────┐
       │   Dashboard   │
       │ (GitHub Pages)│
+      │  reads live   │
+      │  from Firestore│
       └───────────────┘
 ```
 
@@ -158,7 +170,7 @@ scraper/
 │   ├── core/            ← business logic
 │   │   ├── api.js       ← fast-path HTTP fetcher
 │   │   ├── transform.js ← normalization + formatLoanBlock
-│   │   ├── storage.js   ← JSON I/O + loanId dedup
+│   │   ├── storage.js   ← Firestore I/O + loanId dedup
 │   │   └── index.js     ← orchestrator (main entry)
 │   ├── notifiers/       ← presentation (one file per channel)
 │   │   ├── telegram.js
@@ -176,7 +188,8 @@ scraper/
 ├── test/                ← smoke + syntax tests
 │   ├── smoketest.js     ← offline smoke tests (6 categories)
 │   ├── verify_syntax.js
-│   └── explore-site.js
+│   ├── migrate_to_firestore.js  ← one-time data migration
+│   └── send_test_telegram.js    ← real Telegram end-to-end test
 ├── package.json
 └── node_modules/        ← gitignored
 ```
@@ -185,7 +198,7 @@ Key design choices:
 
 - **Single source of truth for messages** — the
   same `formatLoanBlock(loan)` function in
-  `src/core/transform.js` builds the 19-row block
+  `src/core/transform.js` builds the 10-line block
   that **every** channel renders. Change the order
   or add a field once, and all four channels
   (Telegram, Email, Discord, ntfy) update
@@ -201,8 +214,9 @@ Key design choices:
   layer imports core (transform), never the other
   way around.
 - **No `crypto`** — fingerprinting is gone. Dedup
-  is a single sorted `Set` of `loanId`s in
-  `data/notifications_sent.json`.
+  is a single Firestore collection
+  (`/notifications/{loanId}`) with the `loanId` as
+  the doc ID.
 
 ## 📋 Notification Message Format
 
@@ -337,24 +351,22 @@ Key properties:
   entirely.
 - **loanId dedup** — every qualifying loan is
   identified by its public `loanId` (the same
-  `pl_bloan_id` the API returns in
-  `active_loans.json`). A loan is sent only on
-  the first run where its `loanId` is unseen;
-  subsequent runs skip it. The dedup store
-  lives at `data/notifications_sent.json` and
-  is committed back to the repo each run.
+  `pl_bloan_id` the API returns). A loan is
+  sent only on the first run where its `loanId`
+  is unseen; subsequent runs skip it. The dedup
+  store lives in Firestore at
+  `/notifications/{loanId}` and is written
+  atomically with each send.
   *(i2iFunding's own borrower FAQ states "one
   borrower can apply for only one loan at a
   time", so a single `loanId` is sufficient to
   uniquely identify a live listing.)*
-- **Standardized 19-field block** — every
-  channel renders the same row order with the
-  same critical/optional split (see the
-  "Notification Message Format" section above).
-  Optional fields are silently omitted when
-  missing; critical fields are always shown
-  when their source value is present. **No
-  percent symbols in the funding breakdown**
+- **Label-free line list** — every channel
+  renders the same 10 lines in the same order
+  (see the "Notification Message Format"
+  section above). Missing data drops the whole
+  line silently — no `"N/A"`, no empty rows.
+  **No percent symbols in the funding breakdown**
   (only formatted amounts); the only `%` in the
   message is the single interest rate.
 - **No promotional copy** — messages contain
@@ -464,6 +476,8 @@ Go to: **Repository** → **Settings** →
 
 | Secret Name             | Required       | Description |
 |-------------------------|----------------|-------------|
+| `GIT_CRYPT_KEY`         | If git-crypt   | Base64-encoded git-crypt symmetric key (unlocks `.env` + `i2i-yield-watch-sa.json`) |
+| `FIREBASE_SA_JSON`      | If no git-crypt | Full service account JSON as a string (alternative to committed + encrypted file) |
 | `TELEGRAM_ENABLED`      | No             | `"true"` or `"false"` |
 | `TELEGRAM_BOT_TOKEN`    | If Telegram    | From @BotFather |
 | `TELEGRAM_CHAT_ID`      | If Telegram    | Your chat ID |
@@ -532,14 +546,15 @@ After your first deployment, update the
 `DASHBOARD_URL` secret with your actual
 GitHub Pages URL.
 
-## 🔐 git-crypt Setup (Optional)
+## 🔐 git-crypt Setup (Recommended)
 
 By default the repo uses GitHub Secrets for
 credentials. For a more ergonomic workflow,
 the repo supports **git-crypt symmetric mode**:
-the real `.env` is encrypted with a single key
-file and committed to the repo. CI unlocks it
-via `flydiverny/setup-git-crypt@v5`.
+the real `.env` AND the Firebase service account
+JSON (`i2i-yield-watch-sa.json`) are encrypted with
+a single key file and committed to the repo. CI
+unlocks both via `flydiverny/setup-git-crypt@v5`.
 
 **Note:** `git-crypt` does not have an official
 Windows binary. Run the one-time setup on Linux,
@@ -555,9 +570,11 @@ brew install git-crypt        # macOS
 # 2. Initialize git-crypt in the repo
 git-crypt init
 
-# 3. (Already done in this repo) Add to
-#    .gitattributes:
+# 3. (Already done in this repo) The
+#    .gitattributes file already encrypts both
+#    .env and i2i-yield-watch-sa.json:
 #      .env filter=git-crypt diff=git-crypt
+#      i2i-yield-watch-sa.json filter=git-crypt diff=git-crypt
 
 # 4. Export the symmetric key
 git-crypt export-key .git/git-crypt-key
@@ -577,44 +594,123 @@ The workflow already has:
 ```yaml
 - name: Unlock git-crypt
   uses: flydiverny/setup-git-crypt@v5
-  with:
-    git-crypt-key: ${{ secrets.GIT_CRYPT_KEY }}
+
+- name: Decrypt git-crypt files
+  env:
+    GIT_CRYPT_KEY: ${{ secrets.GIT_CRYPT_KEY }}
+  run: |
+    echo "$GIT_CRYPT_KEY" | base64 -d > git-crypt-key
+    git-crypt unlock git-crypt-key
 ```
 
 When `GIT_CRYPT_KEY` is set, CI unlocks the repo
-and the scraper reads `.env` via dotenv. When
-`GIT_CRYPT_KEY` is **not** set, the step is a
-no-op and the scraper falls back to GitHub
-Secrets. The two methods are fully
-interchangeable — pick one, or use both as
-backup.
+and the scraper reads `.env` (channel creds) and
+`i2i-yield-watch-sa.json` (Firebase admin SDK) from
+the working tree. When `GIT_CRYPT_KEY` is **not**
+set, the unlock step is a no-op and you must
+fall back to GitHub Secrets for both. The two
+methods are fully interchangeable — pick one, or
+use both as backup.
 
-## 📁 Data Structure
+## 🗄️ Database (Cloud Firestore)
+
+All state lives in **Cloud Firestore** on the free
+**Spark** tier — no JSON files in the repo, no
+static data. The service account JSON is committed
+to the repo encrypted via git-crypt; CI decrypts it
+on every run.
+
+### Collections
 
 ```
-data/
-├── active_loans.json        ← Current active loans
-├── notifications_sent.json  ← loanId dedup store
-├── stats.json               ← Aggregate statistics
-├── changelog.json           ← Scrape run history
-└── archive/
-    ├── index.json           ← Manifest of monthly files
-    └── fully_funded_YYYY_MM.json  ← Monthly archive
+firestore/
+├── loans/{loanId}             ← Single doc per loan
+│   ├── loanId                 (string, doc ID)
+│   ├── interestRate           (number, %)
+│   ├── yieldScore             (number, 0–100)
+│   ├── priority               ("VERY_HIGH"|"MEDIUM"|"LOW")
+│   ├── status                 ("active"|"archived")
+│   ├── yearMonth              (string "YYYY-MM", null when active)
+│   ├── name, age, location    (borrower fields)
+│   ├── creditScore            (string|"No History")
+│   ├── loanAmount             (number)
+│   ├── amountFunded           (number, derived)
+│   ├── amountLeft             (number)
+│   ├── tenure, product        (string)
+│   ├── ... ~25 fields total
+│   └── updatedAt              (serverTimestamp)
+│
+├── notifications/{loanId}     ← Dedup store
+│   ├── loanId                 (doc ID)
+│   └── notifiedAt             (serverTimestamp)
+│
+├── runs/{runId}               ← Scrape run history
+│   ├── runId                  (string, doc ID)
+│   ├── timestamp              (serverTimestamp)
+│   ├── active, new, archived  (counts)
+│   ├── qualifying, notified   (counts)
+│   └── duration_ms, phases    (metrics)
+│
+├── stats/current              ← Aggregate stats (singleton)
+│   ├── lastUpdated            (serverTimestamp)
+│   ├── currentActive          (number)
+│   ├── totalArchived          (number)
+│   ├── avgInterestRate        (number)
+│   ├── avgYieldScore          (number)
+│   ├── highPriorityCount      (number)
+│   ├── totalScrapedAllTime    (number)
+│   ├── byProduct              (map: product → count)
+│   └── byPriority             (map: priority → count)
+│
+└── meta/
+    ├── archiveIndex           ← { "2026-05": 224, "2026-06": 210 }
+    └── scraper                ← { lastRunId, lastRunAt }
 ```
 
-- **active_loans.json** — Single source of truth
-  for the dashboard. Updated every scrape run.
-- **notifications_sent.json** — Sorted set of
-  `loanId`s that have already been announced.
-  Each unique loan lives here forever once
-  announced; nothing is re-sent.
-- **archive/index.json** — Manifest of every
-  monthly archive file with its record count.
-  The dashboard reads this to populate the
-  Archived tab.
-- **archive/** — Fully funded or disappeared loans
-  are moved here monthly.
-- **changelog.json** — Last 200 scrape runs logged.
+### Security rules
+
+Public read-only access (the dashboard reads
+client-side); no public write. The scraper uses a
+service account (admin SDK) that bypasses rules.
+
+```javascript
+// firestore.rules
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /loans/{loanId} { allow read: if true; allow write: if false; }
+    match /notifications/{id} { allow read: if false; allow write: if false; }
+    match /runs/{runId} { allow read: if true; allow write: if false; }
+    match /stats/{document=**} { allow read: if true; allow write: if false; }
+    match /meta/{document=**} { allow read: if true; allow write: if false; }
+  }
+}
+```
+
+### Free tier limits (Spark)
+
+- **1 GB** storage per project
+- **50K reads / day** (dashboard + API quota)
+- **20K writes / day** (scraper writes)
+- **Unlimited** number of projects (one per repo
+  fork is fine)
+
+### Local development
+
+For local dev, place the service account JSON at
+the project root as `i2i-yield-watch-sa.json` (it
+will be encrypted by git-crypt on commit). The
+scraper reads it via `FIREBASE_SA_PATH` (or the
+default `./i2i-yield-watch-sa.json`). Set
+`FIREBASE_SA_PATH` in `.env` to override.
+
+### One-time data migration
+
+If you fork this repo and want to seed your own
+Firestore with historical data, see
+`scraper/test/migrate_to_firestore.js` — it's a
+one-time script that reads from JSON files and
+bulk-writes to Firestore in 500-doc batches.
 
 ## ⚙️ Configuration
 
@@ -787,9 +883,9 @@ endpoint:
 | Scraper (fast path)    | Node.js `https` POST |
 | Scraper (fallback)     | Node.js + Playwright |
 | Scheduler              | GitHub Actions (cron) |
-| Storage                | JSON files in repo |
+| Database               | Cloud Firestore (Spark tier) |
 | Secrets                | git-crypt symmetric OR GitHub Secrets |
-| Dashboard              | HTML + CSS + Vanilla JS |
+| Dashboard              | HTML + CSS + Vanilla JS + Firebase JS SDK |
 | Charts                 | Chart.js 4.5.1 |
 | Hosting                | GitHub Pages |
 | Notifications          | Telegram + Gmail + Discord + ntfy.sh |
@@ -821,7 +917,7 @@ caching it for when the fallback is needed.
 | Startup jitter (0–2s)                   | spreads load  | `STARTUP_JITTER_MS` (default 2000) in `main()` |
 | Parallel API page fetch (5 at a time)   | ~2–5s on large catalogs | `scraper/src/core/api.js` |
 | Parallel notification channels          | ~1–3s         | `scraper/src/notifiers/notifier.js` |
-| Skip Pages deploy when data unchanged   | ~30–60s       | `data_changed` output in `scrape.yml` |
+| Firestore batched writes (500/batch)    | ~1–3s on large catalogs | `scraper/src/core/storage.js` |
 | `concurrency.cancel-in-progress: false` | no dropped ticks | Queueing instead of cancelling |
 
 The Playwright install is **unconditional** in CI
@@ -848,20 +944,20 @@ The smoke test covers:
 - **Rate filter & scoring** — `>50` filter, priority
   bands, yield score bounds
 - **Notifiers (Telegram / Email / Discord / ntfy)**
-  — chunker, N/A omission, 19-field block, ntfy
-  body shape, ntfy disabled, ntfy missing topic,
-  no promo copy
+  — chunker, N/A omission, label-free line list,
+  ntfy body shape, ntfy disabled, ntfy missing
+  topic, no promo copy
 - **Loan ID & dedup** — `loanId` from `pl_bloan_id`,
   `filterUnnotified`, idempotent `markNotificationsSent`,
   no SHA-1 fingerprinting
 - **API payload (no network)** — `buildFilterBody`
   JSON, `fetchPage` POST + headers, constants
-- **Transform** — 14 helpers + 19-row block + silent
+- **Transform** — 14 helpers + 10-line block + silent
   optional omission
 - **Workflow & layout** — cron = 5-min IST, dispatch,
   no-cancel, 10-min, cached, unconditional Playwright,
   git-crypt, SOLID folder structure, single README,
-  encrypted `.env`
+  encrypted `.env`, Firestore storage
 
 Run them locally before pushing. CI runs `npm test`
 before every scrape on `main`, scheduled ticks, and
