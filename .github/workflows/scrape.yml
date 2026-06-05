@@ -1,0 +1,156 @@
+name: i2i Yield Watch — Auto Scraper
+
+on:
+  schedule:
+    # Every 5 minutes, aligned to IST quarter-fives.
+    # GitHub cron is in UTC; IST = UTC+5:30.
+    - cron: '30,35,40,45,50,55,0,5,10,15,20,25 * * * *'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      use_playwright_fallback:
+        description: 'Use the Playwright DOM fallback path'
+        type: boolean
+        default: false
+        required: false
+  repository_dispatch:
+    types: [tick]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  USE_PLAYWRIGHT_FALLBACK: ${{ inputs.use_playwright_fallback == 'true' && 'true' || 'false' }}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: scraper
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      data_changed: ${{ steps.check.outputs.changed }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: scraper/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('scraper/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('scraper/package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: scraper
+        run: npm ci --prefer-offline
+
+      - name: Lint
+        working-directory: scraper
+        run: npm run lint
+
+      - name: Run tests
+        working-directory: scraper
+        run: npm test
+
+      - name: Unlock git-crypt
+        uses: flydiverny/setup-git-crypt@v5
+        with:
+          git-crypt-key: ${{ secrets.GIT_CRYPT_KEY }}
+
+      - name: Write Firebase service account JSON
+        if: env.FIREBASE_SA_JSON != ''
+        env:
+          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -n "$FIREBASE_SA_JSON" ]; then
+            printf '%s' "$FIREBASE_SA_JSON" > i2i-yield-watch-sa.json
+            echo "Wrote $(wc -c < i2i-yield-watch-sa.json) bytes to i2i-yield-watch-sa.json"
+          fi
+
+      - name: Install Playwright Chromium
+        working-directory: scraper
+        run: npx playwright install chromium --with-deps
+
+      - name: Run scraper
+        working-directory: scraper
+        env:
+          # Config is loaded from git-crypt-decrypted .env.
+          # Secrets below override .env only when set.
+          TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMAIL_ENABLED: ${{ secrets.EMAIL_ENABLED }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          DISCORD_ENABLED: ${{ secrets.DISCORD_ENABLED }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          NTFY_ENABLED: ${{ secrets.NTFY_ENABLED }}
+          NTFY_BASE_URL: ${{ secrets.NTFY_BASE_URL }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_USER: ${{ secrets.NTFY_USER }}
+          NTFY_PASSWORD: ${{ secrets.NTFY_PASSWORD }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          MAX_SHOW_MORE_CLICKS: '150'
+          HIGH_PRIORITY_RATE_THRESHOLD: '70'
+          MEDIUM_PRIORITY_RATE_THRESHOLD: '50'
+          NOTIFY_RATE_THRESHOLD: '50'
+          STARTUP_JITTER_MS: '2000'
+        run: node src/core/index.js
+
+      - name: Mark output
+        id: check
+        run: echo "changed=true" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: scrape
+    runs-on: ubuntu-latest
+    if: always() && needs.scrape.result == 'success'
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dashboard
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

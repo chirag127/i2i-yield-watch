@@ -1,0 +1,10 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Encrypt the .env file with git-crypt symmetric mode.
+# The git-crypt key file is exported once by the repo
+# owner and stored as the GIT_CRYPT_KEY GitHub Secret.
+# CI unlocks it via flydiverny/setup-git-crypt@v5
+# (see .github/workflows/scrape.yml).
+.env filter=git-crypt diff=git-crypt
+i2i-yield-watch-sa.json filter=git-crypt diff=git-crypt

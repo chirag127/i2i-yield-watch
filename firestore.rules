@@ -1,0 +1,22 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Public read for dashboard
+    match /loans/{loanId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /stats/{document=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /runs/{runId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /meta/{document=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

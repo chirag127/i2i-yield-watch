@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0">
+  <title>
+    i2i Yield Watch — High-Yield Loan Intelligence
+  </title>
+  <meta name="description"
+    content="Real-time command center tracking
+    high-yield lending opportunities on i2iFunding.
+    Auto-updated every 5 minutes.">
+  <meta name="theme-color" content="#050508">
+  <meta property="og:title"
+    content="i2i Yield Watch — Command Center">
+  <meta property="og:description"
+    content="Automated high-yield loan intelligence
+    platform for i2iFunding.">
+  <meta property="og:type" content="website">
+
+  <!-- Fonts: Syne (display) + DM Sans (body)
+       + JetBrains Mono (data) -->
+  <link rel="preconnect"
+    href="https://fonts.googleapis.com">
+  <link rel="preconnect"
+    href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Syne:wght@400..800&display=swap">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ======= Header ======= -->
+  <header class="header">
+    <div class="container header-inner">
+      <div class="header-left">
+        <h1 class="logo">Yield Watch</h1>
+        <a class="data-source-badge"
+          href="https://console.firebase.google.com/project/i2i-yield-watch-db/firestore"
+          target="_blank" rel="noopener"
+          title="Live data from Firestore">
+          <span class="data-source-dot"></span>
+          <span class="data-source-label">
+            Firestore (Live)
+          </span>
+        </a>
+      </div>
+      <div class="header-right">
+        <span class="last-updated"
+          id="last-updated">INITIALIZING...</span>
+        <span class="refresh-countdown"
+          id="refresh-countdown"></span>
+        <button class="theme-toggle"
+          id="theme-toggle"
+          aria-label="Toggle theme"
+          title="Toggle theme">🌙</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- ======= Stats ======= -->
+    <section class="stats-bar" id="stats-bar">
+      <div class="stat-card" id="stat-total">
+        <div class="stat-icon">◉</div>
+        <div class="stat-value"
+          id="stat-total-value">—</div>
+        <div class="stat-label" id="stat-total-label">
+          Active
+        </div>
+      </div>
+      <div class="stat-card" id="stat-high">
+        <div class="stat-icon">▲</div>
+        <div class="stat-value"
+          id="stat-high-value">—</div>
+        <div class="stat-label" id="stat-high-label">
+          High Priority
+        </div>
+      </div>
+      <div class="stat-card" id="stat-avg-rate">
+        <div class="stat-icon">◈</div>
+        <div class="stat-value"
+          id="stat-avg-rate-value">—</div>
+        <div class="stat-label" id="stat-avg-rate-label">
+          Avg Rate
+        </div>
+      </div>
+      <div class="stat-card" id="stat-avg-score">
+        <div class="stat-icon">⬡</div>
+        <div class="stat-value"
+          id="stat-avg-score-value">—</div>
+        <div class="stat-label" id="stat-avg-score-label">
+          Avg Score
+        </div>
+      </div>
+      <div class="stat-card" id="stat-highest">
+        <div class="stat-icon">⬆</div>
+        <div class="stat-value"
+          id="stat-highest-value">—</div>
+        <div class="stat-label" id="stat-highest-label">
+          Peak Rate
+        </div>
+      </div>
+    </section>
+
+    <!-- ======= Month Pills (Archived only) ======= -->
+    <section class="month-pills-bar"
+      id="month-pills-bar" hidden>
+      <div class="month-pills-label">
+        <span class="month-pills-icon">▦</span>
+        Archive months:
+      </div>
+      <div class="month-pills" id="month-pills"></div>
+      <button class="month-pills-clear"
+        id="month-pills-clear" hidden>
+        CLEAR
+      </button>
+    </section>
+
+    <!-- ======= Controls ======= -->
+    <section class="controls">
+      <div class="view-tabs" id="view-tabs">
+        <button class="view-tab active"
+          data-view="active" id="tab-active">
+          <span class="view-tab-label">ACTIVE</span>
+          <span class="view-tab-count"
+            id="tab-active-count">—</span>
+        </button>
+        <button class="view-tab"
+          data-view="archived" id="tab-archived">
+          <span class="view-tab-label">ARCHIVED</span>
+          <span class="view-tab-count"
+            id="tab-archived-count">—</span>
+        </button>
+      </div>
+      <button class="filter-toggle-btn"
+        id="filter-toggle">
+        ▽ FILTERS
+      </button>
+      <div class="search-box">
+        <span class="search-icon">⌕</span>
+        <input type="text"
+          class="search-input"
+          id="search-input"
+          placeholder="Search location, purpose...">
+      </div>
+      <select class="sort-select" id="sort-select">
+        <option value="interestRate_desc">
+          ↓ Highest Interest Rate
+        </option>
+        <option value="yieldScore_desc">
+          ↓ Best Yield Score
+        </option>
+        <option value="creditScoreNumeric_desc">
+          ↓ Highest Credit Score
+        </option>
+        <option value="fundingRemaining_desc">
+          ↓ Most Funding Left
+        </option>
+        <option value="madeLiveOn_desc">
+          ↓ Newest First
+        </option>
+        <option value="loanAmount_desc">
+          ↓ Loan Amount
+        </option>
+      </select>
+      <span class="loan-count"
+        id="loan-count"></span>
+    </section>
+
+    <!-- ======= Filter Panel ======= -->
+    <section class="filter-panel"
+      id="filter-panel">
+      <div class="filter-presets">
+        <button class="btn btn-preset"
+          id="preset-70"
+          data-min="70" data-max="200">70%+</button>
+        <button class="btn btn-preset"
+          id="preset-50"
+          data-min="50" data-max="200">50%+</button>
+        <button class="btn btn-preset active"
+          id="preset-all"
+          data-min="0" data-max="200">ALL</button>
+      </div>
+      <div class="filter-grid">
+        <div class="filter-group">
+          <label class="filter-label">
+            Rate Range
+          </label>
+          <div class="filter-range">
+            <input type="number"
+              class="filter-input"
+              id="filter-rate-min"
+              min="0" max="200"
+              value="0" placeholder="Min">
+            <span style="color:var(--text-muted)">
+              —
+            </span>
+            <input type="number"
+              class="filter-input"
+              id="filter-rate-max"
+              min="0" max="200"
+              value="200" placeholder="Max">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Priority
+          </label>
+          <div class="filter-checkboxes">
+            <label class="filter-checkbox">
+              <input type="checkbox"
+                id="filter-priority-very-high"
+                value="VERY_HIGH" checked>
+              Very High
+            </label>
+            <label class="filter-checkbox">
+              <input type="checkbox"
+                id="filter-priority-medium"
+                value="MEDIUM" checked>
+              Medium
+            </label>
+            <label class="filter-checkbox">
+              <input type="checkbox"
+                id="filter-priority-low"
+                value="LOW" checked>
+              Low
+            </label>
+          </div>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Credit Score
+          </label>
+          <select class="filter-select"
+            id="filter-credit">
+            <option value="all">All</option>
+            <option value="no_history">
+              No History
+            </option>
+            <option value="below_550">
+              Below 550
+            </option>
+            <option value="550_699">
+              550 – 699
+            </option>
+            <option value="700_749">
+              700 – 749
+            </option>
+            <option value="750_plus">750+</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Location
+          </label>
+          <input type="text"
+            class="filter-input"
+            id="filter-location"
+            placeholder="City name...">
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Product
+          </label>
+          <select class="filter-select"
+            id="filter-product">
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            Min Funding Left:
+            <span id="funding-remaining-label">
+              0%
+            </span>
+          </label>
+          <input type="range"
+            id="filter-funding"
+            min="0" max="100" value="0">
+        </div>
+      </div>
+      <div class="filter-actions">
+        <button class="btn btn-reset"
+          id="filter-reset">RESET</button>
+      </div>
+    </section>
+
+    <!-- ======= Loans ======= -->
+    <section id="loans-container">
+      <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <span class="loading-text">
+          Scanning loan market...
+        </span>
+      </div>
+      <div class="loans-grid"
+        id="loans-grid"></div>
+    </section>
+
+    <!-- ======= Pagination ======= -->
+    <nav class="pagination" id="pagination"></nav>
+
+    <!-- ======= Charts ======= -->
+    <section class="charts-section">
+      <h2 class="section-title">Analytics</h2>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>Interest Rate Distribution</h3>
+          <div class="chart-wrapper">
+            <canvas id="chart-rate"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>Credit Score Distribution</h3>
+          <div class="chart-wrapper">
+            <canvas id="chart-credit"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>Funding Progress</h3>
+          <div class="chart-wrapper">
+            <canvas id="chart-funding"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>Top Locations</h3>
+          <div class="chart-wrapper">
+            <canvas id="chart-location"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ======= Footer ======= -->
+  <footer class="footer">
+    <div class="container">
+      <p>
+        YIELD WATCH · AUTO-SCRAPED EVERY 15 MIN ·
+        <a href="https://github.com/chirag127/i2i-yield-watch"
+          target="_blank" rel="noopener">
+          GITHUB
+        </a>
+        <span class="kbd-hint">
+          <kbd>/</kbd> search
+          <kbd>←</kbd><kbd>→</kbd> page
+          <kbd>R</kbd> reset
+        </span>
+      </p>
+    </div>
+  </footer>
+
+  <!-- Toast Container -->
+  <div class="toast-container"
+    id="toast-container"></div>
+
+  <script
+    src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+    integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+    crossorigin="anonymous"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
