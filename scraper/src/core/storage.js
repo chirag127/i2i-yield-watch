@@ -11,7 +11,10 @@ const logger = require('../utils/logger');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const SA_PATH = process.env.FIREBASE_SA_PATH
-  || path.join(ROOT, 'i2i-yield-watch-sa.json');
+  ? (path.isAbsolute(process.env.FIREBASE_SA_PATH)
+      ? process.env.FIREBASE_SA_PATH
+      : path.join(ROOT, process.env.FIREBASE_SA_PATH))
+  : path.join(ROOT, 'i2i-yield-watch-sa.json');
 
 let app = null;
 let db = null;
