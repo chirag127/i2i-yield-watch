@@ -1,0 +1,30 @@
+{
+  "name": "i2i-yield-watch-scraper",
+  "version": "1.0.0",
+  "description": "Automated i2iFunding high-yield loan intelligence scraper",
+  "main": "src/core/index.js",
+  "scripts": {
+    "start": "node src/core/index.js",
+    "dev": "node src/core/index.js",
+    "test": "node test/smoketest.js && node test/verify_syntax.js",
+    "test:smoke": "node test/smoketest.js",
+    "test:syntax": "node test/verify_syntax.js",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "firebase-admin": "^13.10.0",
+    "nodemailer": "^8.0.7",
+    "playwright": "^1.52.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.27.0",
+    "eslint": "^9.27.0",
+    "globals": "^16.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Chirag Singhal",
+  "license": "MIT"
+}
