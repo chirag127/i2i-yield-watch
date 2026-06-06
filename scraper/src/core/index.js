@@ -13,7 +13,7 @@ try {
 }
 
 const logger = require('../utils/logger');
-const { fetchAllLoans } = require('./api');
+const { fetchAllLoansViaBrowser } = require('./api-intercept');
 const { transformLoans } = require('./transform');
 const {
   loadActiveLoans,
@@ -37,16 +37,24 @@ const JITTER_MAX_MS = parseInt(
 );
 
 /**
- * Fetch + transform via the pure-HTTP API.
+ * Fetch + transform via the browser-context API
+ * intercept. This is the primary path — it calls
+ * the listing API from inside a real browser so
+ * it bypasses the 502 block, and it gets a clean
+ * JSON array with every field the DOM would have
+ * shown (and more).
  */
 async function fetchAndTransform() {
-  const raw = await fetchAllLoans();
+  const raw = await fetchAllLoansViaBrowser();
   logger.info(`API returned ${raw.length} raw rows`);
   return transformLoans(raw);
 }
 
 /**
- * Fallback path: Playwright + DOM parsing.
+ * Last-resort fallback: Playwright + DOM parsing
+ * with Show More. Used only if the API intercept
+ * fails (e.g. the listing page structure changes
+ * in a way that breaks our XHR listener).
  */
 async function fetchAndTransformDomFallback() {
   logger.warn('Falling back to Playwright/DOM scraper');

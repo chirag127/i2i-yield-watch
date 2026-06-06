@@ -37,21 +37,47 @@ function esc(s) {
 
 /**
  * Render a single loan as a card.
+ * The first line (Rate + Yield) is wrapped in a
+ * clickable <a href> pointing to the loan's public
+ * profile page. The URL line is dropped from the
+ * body so it isn't repeated as plain text below the
+ * clickable rate.
  */
 function renderLoanCard(loan, _rateThreshold) {
-  const lines = formatLoanBlock(loan);
+  const raw = formatLoanBlock(loan);
+  // Extract the URL line (always last) so we can use
+  // it for the clickable header and avoid duplicating
+  // it as plain text below. loan.loanUrl is used as
+  // a fallback when the block somehow didn't include
+  // the URL line.
+  let url = loan.loanUrl || '';
+  let lines = raw;
+  if (raw.length > 0
+    && /^https?:\/\//i.test(raw[raw.length - 1])) {
+    url = raw[raw.length - 1];
+    lines = raw.slice(0, -1);
+  }
   const rate = loan.interestRate || 0;
   const borderColor = rate >= 70
     ? '#ff4444' : rate >= 50
       ? '#ff8800' : '#6b7280';
 
   const header = lines.length > 0
-    ? `<div style="
-         font-size: 22px;
-         font-weight: bold;
-         color: ${borderColor};
-         margin-bottom: 8px;
-       ">${esc(lines[0])}</div>`
+    ? (url
+        ? `<a href="${esc(url)}" style="
+             font-size: 22px;
+             font-weight: bold;
+             color: ${borderColor};
+             text-decoration: none;
+             display: inline-block;
+             margin-bottom: 8px;
+           ">${esc(lines[0])}</a>`
+        : `<div style="
+             font-size: 22px;
+             font-weight: bold;
+             color: ${borderColor};
+             margin-bottom: 8px;
+           ">${esc(lines[0])}</div>`)
     : '';
 
   const body = lines.slice(1)

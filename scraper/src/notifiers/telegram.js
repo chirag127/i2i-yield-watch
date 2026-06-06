@@ -37,22 +37,45 @@ function escHtml(s) {
  * Render a single loan as a Telegram HTML block.
  * The standardized line list is the source of
  * truth (see transform.formatLoanBlock). The
- * first line (Rate + Yield) is bolded as the
- * most-important signal. Every other line is
- * plain. No field labels.
+ * first line (Rate + Yield) is bolded AND wrapped
+ * in a clickable hyperlink pointing to the loan's
+ * public profile page, so tapping the rate line
+ * opens the loan on i2iFunding. Every other line
+ * is plain. No field labels.
  * @param {object} loan
  * @returns {string}
  */
 function formatLoanLine(loan) {
-  const lines = formatLoanBlock(loan);
+  const raw = formatLoanBlock(loan);
+  // The block always puts the URL as its last line
+  // (when present). We extract it so we can:
+  //   1. wrap the first line in <a href="..."> so
+  //      the rate line is the clickable link the
+  //      user actually taps, and
+  //   2. drop the URL line so the URL isn't repeated
+  //      as plain text below the clickable rate.
+  // loan.loanUrl is used as a fallback when the
+  // block somehow didn't include the URL line.
+  let url = loan.loanUrl || '';
+  let lines = raw;
+  if (raw.length > 0
+    && /^https?:\/\//i.test(raw[raw.length - 1])) {
+    url = raw[raw.length - 1];
+    lines = raw.slice(0, -1);
+  }
   return lines
     .map((l, i) => {
       const safe = escHtml(l);
-      // First line: bold the whole line (rate + yield
-      // are the top-of-message signal). This is the
+      // First line: bold + clickable. This is the
       // only place HTML is used; everything else is
       // plain text.
-      return i === 0 ? `<b>${safe}</b>` : safe;
+      if (i === 0) {
+        return url
+          ? `<a href="${escHtml(url)}">`
+            + `<b>${safe}</b></a>`
+          : `<b>${safe}</b>`;
+      }
+      return safe;
     })
     .join('\n');
 }

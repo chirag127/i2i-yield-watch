@@ -312,10 +312,13 @@ function testTelegramIncludesAllUsefulFields() {
   loan.loanUrl = 'https://www.i2ifunding.com/'
     + 'borrower/listing/public-profile/12345';
   const text = formatLoanLine(loan);
-  // Rate + yield at the TOP, bolded.
+  // Rate + yield at the TOP, bolded AND clickable.
   const firstLine = text.split('\n')[0];
   assert.ok(/<b>.*90\.00% p\.a\..*<\/b>/.test(firstLine),
     `First line must be bolded with rate, got: ${firstLine}`);
+  assert.ok(/<a href="[^"]*public-profile\/12345[^"]*">/
+    .test(firstLine),
+    `First line must be a clickable link to public-profile, got: ${firstLine}`);
   assert.ok(/Yield \d+\.\d{2}\/100/.test(firstLine),
     `First line must include yield score, got: ${firstLine}`);
   // Identity (i2i-# and Loan ID)
@@ -344,15 +347,85 @@ function testTelegramIncludesAllUsefulFields() {
   // Tenure
   assert.ok(text.includes('12 Months'),
     'Tenure missing');
-  // URL
+  // URL appears in the message (inside the href), so
+  // the public-profile link is reachable.
   assert.ok(text.includes('public-profile/12345'),
-    'URL missing');
+    'URL missing from message');
+  // URL should NOT also appear as a duplicate
+  // standalone line (it lives only in the href now).
+  const urlLineCount = (text.match(/^https?:\/\//gm) || [])
+    .length;
+  assert.strictEqual(urlLineCount, 0,
+    'URL should not appear as a standalone line when '
+      + 'wrapped in the first-line href');
   // No percent symbols in funding rows
   assert.ok(!/funded.*%/.test(text),
     'Funded row should not contain percent');
   assert.ok(!/left.*%/.test(text),
     'Left row should not contain percent');
-  ok('telegram: rate at top + yield + all key data');
+  ok('telegram: rate at top + yield + clickable + all key data');
+}
+
+function testTelegramFirstLineNoUrlStillBolds() {
+  // When a loan has no loanUrl, the first line must
+  // still be bolded (just not a link).
+  const loan = makeLoan(8, 75);
+  loan.loanUrl = null;
+  const text = formatLoanLine(loan);
+  const firstLine = text.split('\n')[0];
+  assert.ok(/<b>.*75\.00% p\.a\..*<\/b>/.test(firstLine),
+    `First line must be bolded, got: ${firstLine}`);
+  assert.ok(!/<a /.test(firstLine),
+    'No <a> tag should appear when loanUrl is missing');
+  ok('telegram: no-URL fallback still bolds first line');
+}
+
+function testEmailFirstLineIsClickable() {
+  // The first line of every email card must be a
+  // clickable <a href> pointing to the loan's
+  // public-profile URL. The URL must NOT be
+  // repeated as a plain-text <p> below.
+  const loan = makeLoan(7, 90);
+  loan.loanUrl = 'https://www.i2ifunding.com/'
+    + 'borrower/listing/public-profile/555/777';
+  const html = formatEmailHtml(
+    [loan], { activeCount: 1, qualifyingCount: 1 },
+    'https://example.com', { rateThreshold: 50 }
+  );
+  // First line (rate+yield) is a clickable <a href>
+  assert.ok(
+    /<a [^>]*href="https:\/\/www\.i2ifunding\.com\/borrower\/listing\/public-profile\/555\/777"[^>]*>/
+      .test(html),
+    `Rate line must be a clickable link to the public-profile URL, got: ${html.slice(0, 600)}`
+  );
+  // Rate value should appear INSIDE the <a> tag
+  const linkMatch = html.match(
+    /<a [^>]*href="https:\/\/www\.i2ifunding\.com\/borrower\/listing\/public-profile\/555\/777"[^>]*>([\s\S]*?)<\/a>/
+  );
+  assert.ok(linkMatch, 'Could not extract link inner text');
+  assert.ok(/90\.00% p\.a\./.test(linkMatch[1]),
+    `Link text should contain rate, got: ${linkMatch[1]}`);
+  // URL should NOT appear as a plain-text <p> below
+  const urlAsParagraph = /<p[^>]*>\s*https:\/\/www\.i2ifunding\.com\/borrower\/listing\/public-profile\/555\/777\s*<\/p>/;
+  assert.ok(!urlAsParagraph.test(html),
+    'URL should not be a standalone <p> below the clickable rate');
+  ok('email: rate line is a clickable link, no URL duplicate');
+}
+
+function testEmailFirstLineNoUrlStillStyled() {
+  // When loanUrl is missing, the first line must
+  // still render (just not as a link).
+  const loan = makeLoan(8, 75);
+  loan.loanUrl = null;
+  const html = formatEmailHtml(
+    [loan], { activeCount: 1, qualifyingCount: 1 },
+    'https://example.com', { rateThreshold: 50 }
+  );
+  assert.ok(/75\.00% p\.a\./.test(html),
+    'Rate value must still appear in the card');
+  assert.ok(!/<a [^>]*href="https:\/\/www\.i2ifunding\.com/.test(html),
+    'No i2iFunding link should appear when loanUrl is null');
+  ok('email: no-URL fallback still renders rate card');
 }
 
 async function testEmptyNotifies() {
@@ -845,11 +918,51 @@ function testTransformCredit() {
     pickCredit({ usr_cibil_score: '510', bloan_cibil_score: '510' }),
     { text: '510', numeric: 510 }
   );
-  assert.deepStrictEqual(
-    pickCredit({ usr_cibil_score: null, bloan_cibil_score: '510' }),
-    { text: null, numeric: null }
-  );
   ok('pickCredit handles empty / -1 / numeric');
+}
+
+function testPickCreditFallsBackToBloan() {
+  // When the borrower-level usr_cibil_score is empty
+  // or NA, we should fall back to the loan-level
+  // bloan_cibil_score (this is the common case for
+  // Urban Clap / partner-originated loans where the
+  // borrower CIBIL hasn't been pulled yet).
+  assert.deepStrictEqual(
+    pickCredit({ usr_cibil_score: '', bloan_cibil_score: '510' }),
+    { text: '510', numeric: 510 },
+    'empty usr -> use bloan'
+  );
+  assert.deepStrictEqual(
+    pickCredit({ usr_cibil_score: null, bloan_cibil_score: '750' }),
+    { text: '750', numeric: 750 },
+    'null usr -> use bloan'
+  );
+  assert.deepStrictEqual(
+    pickCredit({ usr_cibil_score: '600', bloan_cibil_score: '750' }),
+    { text: '600', numeric: 600 },
+    'usr present -> prefer usr over bloan'
+  );
+  assert.deepStrictEqual(
+    pickCredit({ usr_cibil_score: '', bloan_cibil_score: '' }),
+    { text: null, numeric: null },
+    'both empty -> null'
+  );
+  ok('pickCredit falls back to bloan_cibil_score');
+}
+
+function testPickCreditNoHistory() {
+  // "-1" sentinel in either column means "No History".
+  assert.deepStrictEqual(
+    pickCredit({ usr_cibil_score: '-1', bloan_cibil_score: '' }),
+    { text: 'No History', numeric: null },
+    '-1 in usr is No History'
+  );
+  assert.deepStrictEqual(
+    pickCredit({ usr_cibil_score: '', bloan_cibil_score: -1 }),
+    { text: 'No History', numeric: null },
+    '-1 in bloan is No History'
+  );
+  ok('pickCredit -1 sentinel means No History');
 }
 
 function testTransformTenure() {
@@ -889,14 +1002,90 @@ function testTransformFunding() {
 }
 
 function testTransformLoanUrl() {
-  assert.ok(buildLoanUrl('12345', '999').includes(
-    'public-profile/12345'
-  ), 'URL must use public-profile pattern');
+  // Canonical pattern: /public-profile/{borrowerId}/{loanId}
+  const full = buildLoanUrl('12345', '999');
+  assert.ok(full.includes('public-profile/12345'),
+    'URL must use public-profile pattern');
+  assert.ok(full.includes('public-profile/12345/999'),
+    'URL must include both borrowerId and loanId');
+  // Graceful degradation: missing loanId still yields
+  // a valid URL with just the borrowerId segment.
+  assert.ok(buildLoanUrl('12345', null)
+    .endsWith('public-profile/12345'),
+    'null loanId falls back to borrowerId-only URL');
+  assert.ok(buildLoanUrl('12345', '')
+    .endsWith('public-profile/12345'),
+    'empty loanId falls back to borrowerId-only URL');
   assert.ok(buildLoanUrl(null, '999') === '',
     'null borrowerRef -> empty URL');
   assert.ok(buildLoanUrl(undefined, '999') === '',
     'undefined borrowerRef -> empty URL');
-  ok('buildLoanUrl: public-profile pattern');
+  ok('buildLoanUrl: /public-profile/{borrowerId}/{loanId}');
+}
+
+function testPurposePrefersBloanDesc() {
+  // The transform should prefer the rich bloan_desc
+  // narrative ("Need Loan to Purchase Standardized
+  // Beauty Kit Package from Urban Clap") over the
+  // shorter purpose field ("Personal Loan") and the
+  // free-text bloan_other_perpose fallback. It walks
+  // the candidates in order: bloan_desc, then
+  // bloan_other_perpose, then purpose.
+  const a = transformLoan({
+    pl_bloan_id: 1,
+    pl_user_id: 2,
+    pl_amt: '1000',
+    pl_amt_left: '0',
+    pl_status: 1,
+    pl_applicable_rate: '20',
+    bloan_desc: 'Rich narrative purpose',
+    purpose: 'Short purpose',
+  });
+  assert.strictEqual(a.purpose, 'Rich narrative purpose',
+    'bloan_desc wins when present');
+
+  const b = transformLoan({
+    pl_bloan_id: 1,
+    pl_user_id: 2,
+    pl_amt: '1000',
+    pl_amt_left: '0',
+    pl_status: 1,
+    pl_applicable_rate: '20',
+    bloan_desc: '',
+    bloan_other_perpose: 'Other text',
+    purpose: 'Short purpose',
+  });
+  assert.strictEqual(b.purpose, 'Other text',
+    'bloan_other_perpose wins when bloan_desc is empty');
+
+  const c = transformLoan({
+    pl_bloan_id: 1,
+    pl_user_id: 2,
+    pl_amt: '1000',
+    pl_amt_left: '0',
+    pl_status: 1,
+    pl_applicable_rate: '20',
+    bloan_desc: '',
+    bloan_other_perpose: '',
+    purpose: 'Short purpose',
+  });
+  assert.strictEqual(c.purpose, 'Short purpose',
+    'purpose used as final fallback');
+
+  const d = transformLoan({
+    pl_bloan_id: 1,
+    pl_user_id: 2,
+    pl_amt: '1000',
+    pl_amt_left: '0',
+    pl_status: 1,
+    pl_applicable_rate: '20',
+    bloan_desc: '',
+    bloan_other_perpose: '',
+    purpose: '',
+  });
+  assert.strictEqual(d.purpose, null,
+    'all empty -> null');
+  ok('purpose prefers bloan_desc over purpose');
 }
 
 function testTransformComplete() {
@@ -933,7 +1122,7 @@ function testTransformComplete() {
     bloan_i2i_category: 'D',
     location: 'Mumbai',
     product_name: 'Regular Loans',
-    bloan_desc: 'Test loan',
+    bloan_desc: 'Test loan rich narrative',
     bloan_i2i_rate: '32.5000',
     loan_count: 1,
   };
@@ -972,6 +1161,11 @@ function testTransformComplete() {
   assert.strictEqual(out.fundedPercent, 80);
   assert.strictEqual(out.fundingRemaining, 20);
   assert.strictEqual(out.isFullyFunded, false);
+  // Purpose comes from bloan_desc (rich narrative)
+  // when present, not from the terse `purpose` field.
+  assert.strictEqual(out.purpose,
+    'Test loan rich narrative',
+    'purpose must prefer bloan_desc');
   assert.ok(out.loanUrl.includes('public-profile/555'));
   assert.ok(out.scrapedAt.endsWith('Z'),
     'scrapedAt must be ISO');
@@ -1301,6 +1495,9 @@ function testProjectLayout() {
   t('telegram chunker', testTelegramChunker);
   t('telegram omits N/A', testTelegramOmitsNA);
   t('telegram includes fields', testTelegramIncludesAllUsefulFields);
+  t('telegram first-line no-URL fallback', testTelegramFirstLineNoUrlStillBolds);
+  t('email first-line clickable', testEmailFirstLineIsClickable);
+  t('email first-line no-URL fallback', testEmailFirstLineNoUrlStillStyled);
   await ta('notifier empty', testEmptyNotifies);
   await ta('notifier disabled', testDisabledChannels);
   t('wasAnyChannelSuccessful', testWasAnyChannelSuccessful);
@@ -1327,9 +1524,15 @@ function testProjectLayout() {
   t('NA matcher', testTransformNA);
   t('pickRate', testTransformPicksApplicableRate);
   t('pickCredit', testTransformCredit);
+  t('pickCredit falls back to bloan',
+    testPickCreditFallsBackToBloan);
+  t('pickCredit -1 sentinel',
+    testPickCreditNoHistory);
   t('formatTenure', testTransformTenure);
   t('computeFunding', testTransformFunding);
   t('buildLoanUrl', testTransformLoanUrl);
+  t('purpose prefers bloan_desc',
+    testPurposePrefersBloanDesc);
   t('transformLoan complete', testTransformComplete);
   t('transformLoans skips bad rows', testTransformLoansSkipsBadRows);
   t('formatPostedOn', testTransformFormatPostedOn);

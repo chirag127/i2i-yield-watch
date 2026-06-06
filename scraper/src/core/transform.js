@@ -88,39 +88,53 @@ function pickRate(row) {
 /**
  * Build the public loan-detail URL. The listing page
  * is an Angular SPA where "View Details" is JS-driven
- * (href is empty). The most useful fallback is the
- * public profile for the borrower; that page lists
- * every loan the borrower has applied for.
+ * (href is empty). The canonical i2iFunding URL for
+ * a specific loan is the public profile at
+ * /borrower/listing/public-profile/{borrowerId}/{loanId}.
+ * If loanId is missing, the URL falls back to the
+ * borrower-level profile (still a valid SPA route).
  */
-function buildLoanUrl(borrowerRef, _loanId) {
+function buildLoanUrl(borrowerRef, loanId) {
   if (!borrowerRef) return '';
-  return (
-    'https://www.i2ifunding.com/borrower/listing/'
-    + 'public-profile/'
-    + encodeURIComponent(String(borrowerRef))
-  );
+  const parts = [
+    'https://www.i2ifunding.com/borrower/listing',
+    'public-profile',
+    encodeURIComponent(String(borrowerRef)),
+  ];
+  if (loanId !== null && loanId !== undefined
+    && loanId !== '') {
+    parts.push(encodeURIComponent(String(loanId)));
+  }
+  return parts.join('/');
 }
 
 /**
  * Normalize the CIBIL score. The API uses:
- *   ""      → not pulled
- *   "-1"    → no history
- *   "510"   → real number
+ *   ""       → not pulled
+ *   "-1"     → no history
+ *   "510"    → real number
+ *
+ * We prefer the borrower-level `usr_cibil_score` and
+ * fall back to the loan-level `bloan_cibil_score` when
+ * the borrower field is empty. The "-1" sentinel
+ * means "No History" in either column.
  */
 function pickCredit(row) {
   const cibil = row.usr_cibil_score;
   const bloan = row.bloan_cibil_score;
-  if (NA(cibil)) {
-    if (bloan === '-1' || bloan === -1) return {
-      text: 'No History', numeric: null,
+  const tryValue = (v) => {
+    if (NA(v)) return null;
+    if (v === '-1' || v === -1) {
+      return { text: 'No History', numeric: null };
+    }
+    const n = toNumber(v);
+    return {
+      text: n !== null ? String(n) : String(v),
+      numeric: n,
     };
-    return { text: null, numeric: null };
-  }
-  const n = toNumber(cibil);
-  return {
-    text: n !== null ? String(n) : String(cibil),
-    numeric: n,
   };
+  return tryValue(cibil) || tryValue(bloan)
+    || { text: null, numeric: null };
 }
 
 /**
@@ -220,8 +234,26 @@ function transformLoan(row) {
       : String(row.location).trim(),
     residenceType: NA(row.residence_type) ? null
       : String(row.residence_type).trim(),
-    purpose: NA(row.purpose) ? null
-      : String(row.purpose).trim(),
+    // Purpose: prefer the rich `bloan_desc` narrative
+    // ("Need Loan to Purchase Standardized Beauty Kit
+    // Package from Urban Clap") over the terse
+    // `purpose` field ("To Purchase Standardize Beauty
+    // Kit") and the `bloan_other_perpose` free-text
+    // fallback. All three are independent columns on
+    // the same row.
+    purpose: (() => {
+      const candidates = [
+        row.bloan_desc,
+        row.bloan_other_perpose,
+        row.purpose,
+      ];
+      for (const c of candidates) {
+        if (NA(c)) continue;
+        const s = String(c).trim();
+        if (s) return s;
+      }
+      return null;
+    })(),
     creditScore: credit.text,
     creditScoreNumeric: credit.numeric,
     riskCategory: NA(row.bloan_i2i_category) ? null

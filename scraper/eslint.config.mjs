@@ -4,7 +4,11 @@ import globals from 'globals';
 export default [
   js.configs.recommended,
   {
-    ignores: ['test/explore-site.js'],
+    ignores: [
+      'test/explore-site.js',
+      'test/explore-*.js',
+      'test/migrate_to_firestore.js',
+    ],
   },
   {
     files: ['src/**/*.js', 'test/**/*.js'],

@@ -2,20 +2,34 @@
 // hand-built test loan through the production
 // sendTelegram() pipeline to verify end-to-end.
 //
-// Set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID env vars
-// before running (read from the encrypted .env).
-//
 //   node test/send_test_telegram.js
+//
+// Loads TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID from
+// the encrypted .env at the project root (same
+// dotenv config as the production scraper).
+try {
+  require('dotenv').config({
+    path: require('path').join(
+      __dirname, '..', '..', '.env'
+    ),
+  });
+} catch {
+  // dotenv not installed — assume env already set
+}
+
 const {
   sendTelegram,
 } = require('../src/notifiers/telegram');
 const {
   formatLoanBlock,
+  buildLoanUrl,
 } = require('../src/core/transform');
 
+const testId = 'TEST-' + Date.now();
+const testBorrower = '999999';
 const loan = {
-  loanId: 'TEST-' + Date.now(),
-  borrowerRef: '999999',
+  loanId: testId,
+  borrowerRef: testBorrower,
   name: 'TEST BORROWER',
   age: 30,
   location: 'Bengaluru',
@@ -38,7 +52,10 @@ const loan = {
   fundedPercent: 50,
   fundingRemaining: 50,
   isFullyFunded: false,
-  loanUrl: 'https://www.i2ifunding.com/borrower/listing',
+  // Use the same canonical public-profile URL the
+  // real scraper constructs, so the first-line link
+  // matches what a real notification looks like.
+  loanUrl: buildLoanUrl(testBorrower, testId),
   yieldScore: 38.19,
   priority: 'VERY_HIGH',
 };
@@ -46,6 +63,11 @@ const loan = {
 console.log('--- TEST LOAN ---');
 const lines = formatLoanBlock(loan);
 lines.forEach((l, i) => console.log(`${i+1}. ${l}`));
+console.log('--- TELEGRAM HTML (first line clickable) ---');
+const {
+  formatLoanLine,
+} = require('../src/notifiers/telegram');
+console.log(formatLoanLine(loan));
 console.log('-----------------');
 
 (async () => {
@@ -58,3 +80,4 @@ console.log('-----------------');
   console.log(ok ? 'SENT OK' : 'SEND FAILED');
   process.exit(ok ? 0 : 1);
 })();
+
