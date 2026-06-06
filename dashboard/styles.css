@@ -852,10 +852,26 @@ requency='0.9' numOctaves='4' stitchTiles='stitch'\
   letter-spacing: 0.3px;
 }
 
-/* Rate Display */
+/* Rate Display — clickable: opens the loan on
+   i2iFunding.com. Stays visually a rate (colored
+   by priority), no underline, with a subtle hover
+   effect that hints at the link. */
 .card-rate {
+  display: block;
   margin-bottom: 16px;
   line-height: 1;
+  text-decoration: none;
+  color: inherit;
+  transition: opacity 0.15s ease;
+  cursor: pointer;
+}
+.card-rate:hover {
+  opacity: 0.75;
+}
+.card-rate:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 .rate-value {
   font-family: var(--font-data);

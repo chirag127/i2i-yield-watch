@@ -86,16 +86,25 @@ function escapeHtml(str) {
 
 /**
  * Build loan URL (mirrors scraper transform.js).
+ * Canonical pattern: /public-profile/{borrowerId}/{loanId}.
+ * loanId is included when available so the user lands
+ * directly on the specific loan's profile. Falls back
+ * to borrower-only when loanId is missing.
  */
-function buildLoanUrl(borrowerRef) {
+function buildLoanUrl(borrowerRef, loanId) {
   if (!borrowerRef) {
     return 'https://www.i2ifunding.com/borrower/listing';
   }
-  return (
-    'https://www.i2ifunding.com/borrower/listing/'
-    + 'public-profile/'
-    + encodeURIComponent(String(borrowerRef))
-  );
+  const parts = [
+    'https://www.i2ifunding.com/borrower/listing',
+    'public-profile',
+    encodeURIComponent(String(borrowerRef)),
+  ];
+  if (loanId !== null && loanId !== undefined
+    && loanId !== '') {
+    parts.push(encodeURIComponent(String(loanId)));
+  }
+  return parts.join('/');
 }
 
 const debouncedRenderCharts = debounce(renderCharts, 150);
@@ -669,7 +678,8 @@ function renderLoanCard(loan, index) {
   const delay = (index % LOANS_PER_PAGE) * 25;
 
   const url = escapeHtml(
-    loan.loanUrl || buildLoanUrl(loan.borrowerRef)
+    loan.loanUrl
+      || buildLoanUrl(loan.borrowerRef, loan.loanId)
   );
   const loanId = escapeHtml(loan.loanId);
   const priorityLabel = escapeHtml(
@@ -710,10 +720,13 @@ function renderLoanCard(loan, index) {
         LIVE ${escapeHtml(liveAgo)}
       </div>` : ''}
 
-      <div class="card-rate">
+      <a class="card-rate" href="${url}"
+        target="_blank" rel="noopener"
+        title="Open ${escapeHtml(loan.name || 'loan')}
+          on i2iFunding (${loanId})">
         <span class="rate-value">${rate}</span>
         <span class="rate-unit">% p.a.</span>
-      </div>
+      </a>
 
       <div class="card-divider"></div>
 
