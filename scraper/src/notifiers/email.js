@@ -256,6 +256,7 @@ async function sendEmail(
 module.exports = {
   sendEmail,
   formatEmailHtml,
+  renderLoanCard,
   esc,
   getTransporter,
 };
