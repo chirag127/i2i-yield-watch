@@ -28,7 +28,7 @@
 const { chromium } = require('playwright');
 const logger = require('../utils/logger');
 const { buildFilterBody,
-  API_HOST, API_PATH, PAGE_SIZE_HINT, MAX_PAGES,
+  API_HOST, API_PATH, MAX_PAGES,
 } = require('./api');
 
 const TARGET_URL =
@@ -141,6 +141,13 @@ async function fetchAllLoansViaBrowser() {
 
       const all = [];
       const seen = new Set();
+      // We stop only on a truly empty page. A page
+      // that returns < PAGE_SIZE_HINT rows is NOT a
+      // signal that we're at the end — the actual
+      // page size from i2iFunding is 8-9, not 10,
+      // so the previous "< PAGE_SIZE_HINT => done"
+      // heuristic caused us to miss page 2+ entirely
+      // (e.g. 9 loans on page 1, more on page 2).
       const merge = (rows) => {
         if (rows.length === 0) return true;
         for (const r of rows) {
@@ -150,7 +157,7 @@ async function fetchAllLoansViaBrowser() {
           seen.add(id);
           all.push(r);
         }
-        return rows.length < PAGE_SIZE_HINT;
+        return false;
       };
 
       // Paginate from page 1 onward, in parallel

@@ -1430,6 +1430,7 @@ function testProjectLayout() {
   const root = path.join(__dirname, '..', '..');
   for (const f of [
     'scraper/src/core/api.js',
+    'scraper/src/core/api-intercept.js',
     'scraper/src/core/transform.js',
     'scraper/src/core/storage.js',
     'scraper/src/core/index.js',

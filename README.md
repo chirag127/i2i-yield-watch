@@ -20,14 +20,21 @@
 - 🤖 **Fully Automated** — Polls i2iFunding
   every **5 minutes** via GitHub Actions
   (aligned to IST :00, :05, :10, ..., :55)
-- ⚡ **Fast Path** — A single POST to
-  `api.i2ifunding.com` (the same call the
-  site's Angular SPA makes). ~1 second per
-  run, no headless browser required.
-- 🛡️ **Resilient** — Pure-HTTP path
-  automatically falls back to the legacy
-  Playwright/DOM path if the API ever
-  changes shape or returns an error.
+- ⚡ **In-Browser API Fetch** — A single
+  Playwright session opens the listing
+  page, then `page.evaluate(fetch)` calls
+  the same `getActiveFilteredBorrowers`
+  endpoint the i2iFunding Angular SPA
+  uses. The browser context bypasses the
+  502 block that direct Node.js `fetch`
+  hits, and we get clean JSON with more
+  data than the DOM (real borrower name,
+  purpose narrative, nature-of-work, etc.).
+  ~5-15 seconds for 20 loans.
+- 🛡️ **Resilient** — The in-browser API
+  path automatically falls back to the
+  legacy Playwright/DOM path if the API
+  ever changes shape or returns an error.
   Playwright is **always installed** in CI
   (cached for ~5s on warm runs) so the
   fallback is hot.
@@ -98,27 +105,30 @@ JSON, always fresh.
 
 ```
                    ┌─────────────────────┐
-                   │   i2iFunding API    │
-                   │  (public borrower   │
-                   │   listing endpoint) │
+                   │   i2iFunding        │
+                   │   borrower listing  │
+                   │   (Angular SPA)     │
                    └──────────┬──────────┘
-                              │ POST getActiveFilteredBorrowers
+                              │ 1. open in Playwright
+                              │    (sets cookies)
                               ▼
                    ┌─────────────────────┐
-                   │ src/core/api.js     │  ← fast path
-                   │   (pure Node https) │     ~1s per run
+                   │ src/core/           │  ← primary
+                   │  api-intercept.js   │     ~5-15s
+                   │  (in-page fetch)    │     bypasses 502
                    └──────────┬──────────┘
-                              │ if API throws…
+                              │ if intercept throws…
                               ▼
                    ┌─────────────────────┐
                    │ src/browser/        │  ← fallback
                    │   scraper.js        │  (Playwright)
-                   │   (DOM parse)       │
+                   │   (DOM parse +      │
+                   │    Show More)       │
                    └──────────┬──────────┘
                               │
                               ▼
                    ┌─────────────────────┐
-                   │ src/core/transform  │  (API/DOM → normal)
+                   │ src/core/transform  │  (raw API/DOM → normal)
                    │ formatLoanBlock()   │  (one 10-line block)
                    └──────────┬──────────┘
                               │
@@ -149,15 +159,21 @@ JSON, always fresh.
       └───────────────┘
 ```
 
-The fast path is a single POST to the same endpoint
-the i2iFunding Angular SPA calls when you load
-`/borrower/listing`. No headless browser, no
-pagination-clicking, no brittle DOM selectors. The
-legacy Playwright/DOM path is kept as a fallback
-(triggered automatically on API failure, or manually
-via `USE_PLAYWRIGHT_FALLBACK=true`) so the scraper
-keeps working even if the i2iFunding backend ever
-changes shape.
+The primary path opens the i2iFunding borrower
+listing in a real Chromium browser, then calls
+the same `getActiveFilteredBorrowers` endpoint
+the site's own Angular SPA calls — but from
+inside the page context (`page.evaluate(fetch)`).
+This bypasses the 502 block that any direct
+Node.js `fetch` hits, and gives us clean JSON
+with more data than the DOM (real borrower name,
+`bloan_desc` purpose narrative, `nature_of_work`).
+Pages 1..N are paginated in parallel batches of 3.
+The legacy Playwright/DOM path is kept as a
+fallback (triggered automatically on API failure,
+or manually via `USE_PLAYWRIGHT_FALLBACK=true`)
+so the scraper keeps working even if the
+i2iFunding backend ever changes shape.
 
 ## 🏛️ Project Architecture (SOLID)
 
@@ -168,10 +184,11 @@ clean folderized structure:
 scraper/
 ├── src/
 │   ├── core/            ← business logic
-│   │   ├── api.js       ← fast-path HTTP fetcher
-│   │   ├── transform.js ← normalization + formatLoanBlock
-│   │   ├── storage.js   ← Firestore I/O + loanId dedup
-│   │   └── index.js     ← orchestrator (main entry)
+│   │   ├── api.js         ← legacy pure-HTTP fetcher (always 502s; kept for reference)
+│   │   ├── api-intercept.js ← primary in-browser API fetcher (Playwright + page.evaluate)
+│   │   ├── transform.js   ← normalization + formatLoanBlock
+│   │   ├── storage.js     ← Firestore I/O + loanId dedup
+│   │   └── index.js       ← orchestrator (main entry)
 │   ├── notifiers/       ← presentation (one file per channel)
 │   │   ├── telegram.js
 │   │   ├── email.js
@@ -181,15 +198,16 @@ scraper/
 │   ├── utils/           ← stateless helpers
 │   │   ├── logger.js
 │   │   └── scorer.js
-│   └── browser/         ← Playwright fallback (DOM path)
+│   └── browser/         ← Playwright DOM fallback (last resort)
 │       ├── scraper.js
 │       ├── parser.js
 │       └── showmore.js
 ├── test/                ← smoke + syntax tests
-│   ├── smoketest.js     ← offline smoke tests (6 categories)
+│   ├── smoketest.js     ← offline smoke tests
 │   ├── verify_syntax.js
-│   ├── migrate_to_firestore.js  ← one-time data migration
-│   └── send_test_telegram.js    ← real Telegram end-to-end test
+│   ├── verify-intercept.js   ← real i2iFunding intercept smoke test
+│   ├── verify-real-telegram.js ← real end-to-end (intercept → Telegram)
+│   └── send_test_telegram.js  ← synthetic Telegram test
 ├── package.json
 └── node_modules/        ← gitignored
 ```
@@ -722,8 +740,8 @@ All configuration is via environment variables
 | `NOTIFY_RATE_THRESHOLD`        | `50`    | Strictly-greater rate gate for **notifications** (each unique loan is announced once) |
 | `HIGH_PRIORITY_RATE_THRESHOLD` | `70`    | Min rate for VERY_HIGH priority |
 | `MEDIUM_PRIORITY_RATE_THRESHOLD` | `50`  | Min rate for MEDIUM priority |
-| `MAX_SHOW_MORE_CLICKS`         | `150`   | Safety limit for Playwright Show More clicks |
-| `USE_PLAYWRIGHT_FALLBACK`      | `true`  | Use the Playwright DOM fallback path when API fails |
+| `MAX_SHOW_MORE_CLICKS`         | `150`   | Safety limit for Playwright Show More clicks (fallback only) |
+| `USE_PLAYWRIGHT_FALLBACK`      | `false` | Force the legacy Playwright/DOM path instead of the in-browser API intercept |
 | `TELEGRAM_ENABLED`             | `false` | Enable Telegram channel |
 | `EMAIL_ENABLED`                | `false` | Enable Gmail SMTP channel |
 | `DISCORD_ENABLED`              | `false` | Enable Discord webhook channel |
@@ -754,20 +772,21 @@ cp .env.example .env
 cd scraper
 npm install
 
-# 4. (Optional) Install Playwright browser
-# The default fast path is pure HTTP and
-# needs no browser. Playwright is only used
-# by the DOM fallback path.
+# 4. Install Playwright browser
+# The primary in-browser API path requires
+# Chromium. The DOM fallback also needs it.
 npx playwright install chromium
 
-# 5. Run the scraper (default: fast HTTP path)
+# 5. Run the scraper (default: in-browser API path)
 node src/core/index.js
 # Or force the legacy DOM/Playwright path:
 USE_PLAYWRIGHT_FALLBACK=true node src/core/index.js
 
-# 6. (Optional) Run smoke + syntax tests
+# 6. (Optional) Real end-to-end smoke tests
 node test/smoketest.js
 node test/verify_syntax.js
+node test/verify-intercept.js   # real i2iFunding intercept
+node test/verify-real-telegram.js  # real Telegram send
 ```
 
 To view the dashboard locally, serve the project
@@ -880,8 +899,8 @@ endpoint:
 
 | Component              | Technology |
 |------------------------|------------|
-| Scraper (fast path)    | Node.js `https` POST |
-| Scraper (fallback)     | Node.js + Playwright |
+| Scraper (primary)      | Node.js + Playwright + in-page `fetch()` |
+| Scraper (fallback)     | Node.js + Playwright + DOM parse |
 | Scheduler              | GitHub Actions (cron) |
 | Database               | Cloud Firestore (Spark tier) |
 | Secrets                | git-crypt symmetric OR GitHub Secrets |
@@ -892,9 +911,10 @@ endpoint:
 
 ## 🛠️ Skills & Tools Used
 
-- **playwright** — powers the DOM fallback path
-  (`scraper/src/browser/`) and the live-page
-  exploration script (`scraper/test/explore-site.js`)
+- **playwright** — powers both the primary
+  in-browser API path (`scraper/src/core/api-intercept.js`)
+  and the legacy DOM fallback
+  (`scraper/src/browser/`)
 - **webapp-testing** — used during initial
   development to verify the live i2iFunding page
   structure and selectors
@@ -903,9 +923,9 @@ endpoint:
 
 The default workflow run is **~30 seconds** (cold)
 or **~15 seconds** (warm cache). The biggest
-savings come from skipping the Playwright browser
-install when the pure-HTTP fast path is used, and
-caching it for when the fallback is needed.
+savings come from caching the Playwright Chromium
+install, the parallel in-page pagination, and
+Firestore batched writes.
 
 | Optimization                            | Saves         | Where |
 |-----------------------------------------|---------------|-------|
@@ -913,9 +933,9 @@ caching it for when the fallback is needed.
 | `actions/cache` for Playwright Chromium | ~60s on warm runs | (warm cache → ~5s install) |
 | Shallow checkout (`fetch-depth: 1`)     | ~5-10s        | First `actions/checkout` step |
 | `npm ci --prefer-offline --no-audit`    | ~2-5s         | Cached tarball resolution, skips audit metadata fetch |
-| Pure-HTTP fetch (no Playwright launch)  | ~30s/run      | `scraper/src/core/api.js` fast path |
+| In-page API fetch (vs. DOM parse)       | ~25-50s/run   | `scraper/src/core/api-intercept.js` — single JSON, no selectors |
 | Startup jitter (0–2s)                   | spreads load  | `STARTUP_JITTER_MS` (default 2000) in `main()` |
-| Parallel API page fetch (5 at a time)   | ~2–5s on large catalogs | `scraper/src/core/api.js` |
+| Parallel in-page API page fetch (3/batch) | ~2-5s on large catalogs | `scraper/src/core/api-intercept.js` |
 | Parallel notification channels          | ~1–3s         | `scraper/src/notifiers/notifier.js` |
 | Firestore batched writes (500/batch)    | ~1–3s on large catalogs | `scraper/src/core/storage.js` |
 | `concurrency.cancel-in-progress: false` | no dropped ticks | Queueing instead of cancelling |
