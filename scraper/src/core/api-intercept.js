@@ -30,6 +30,7 @@ const logger = require('../utils/logger');
 const { buildFilterBody,
   API_HOST, API_PATH, MAX_PAGES,
 } = require('./api');
+const { closeBrowserSafely } = require('../browser/close-browser');
 
 const TARGET_URL =
   'https://www.i2ifunding.com/borrower/listing';
@@ -204,10 +205,7 @@ async function fetchAllLoansViaBrowser() {
         nextPage += batch.length;
       }
 
-      await Promise.race([
-        browser.close(),
-        new Promise((r) => setTimeout(r, 5000)),
-      ]);
+      await closeBrowserSafely(browser);
       logger.info(
         `Intercept total unique rows: ${all.length}`
       );
@@ -220,15 +218,7 @@ async function fetchAllLoansViaBrowser() {
           err.message}`
       );
       if (browser) {
-        try {
-          await Promise.race([
-            browser.close(),
-            new Promise((r) => setTimeout(r, 3000)),
-          ]);
-        } catch (_e) {
-          // Best-effort close — swallow any error
-          // (browser may already be in a bad state).
-        }
+        await closeBrowserSafely(browser);
       }
       if (attempt < MAX_RETRIES) {
         const delay = RETRY_DELAY_MS * attempt;

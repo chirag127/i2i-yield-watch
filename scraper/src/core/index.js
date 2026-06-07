@@ -90,21 +90,30 @@ async function main() {
 
     const fetchT0 = Date.now();
     let freshLoans;
+    let fetchPath;
     if (useDomOnly) {
       freshLoans = await fetchAndTransformDomFallback();
+      fetchPath = 'dom-fallback';
     } else {
       try {
         freshLoans = await fetchAndTransform();
+        fetchPath = 'api-intercept';
       } catch (apiErr) {
         logger.warn(
           `API fetch failed: ${apiErr.message} — `
           + 'falling back to Playwright/DOM'
         );
+        logger.warn(
+          `API fetch stack: ${apiErr.stack || 'none'}`
+        );
         freshLoans = await fetchAndTransformDomFallback();
+        fetchPath = 'dom-fallback';
       }
     }
     phases.fetch_ms = Date.now() - fetchT0;
-    logger.info(`Got ${freshLoans.length} loans`);
+    logger.info(
+      `Got ${freshLoans.length} loans via ${fetchPath}`
+    );
 
     const storageT0 = Date.now();
     const existingLoans = await loadActiveLoans();
@@ -207,6 +216,7 @@ async function main() {
       completedAt,
       duration_ms: durationMs,
       phases,
+      fetchPath,
       loansFound: freshLoans.length,
       newLoans: newLoans.length,
       loansArchived: archivedCount,
@@ -238,6 +248,7 @@ async function main() {
         runId,
         startedAt,
         completedAt: new Date().toISOString(),
+        fetchPath: 'error',
         loansFound: 0,
         newLoans: 0,
         loansArchived: 0,

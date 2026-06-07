@@ -7,6 +7,7 @@ const { chromium } = require('playwright');
 const logger = require('../utils/logger');
 const { clickShowMoreUntilDone } = require('./showmore');
 const { parseLoans } = require('./parser');
+const { closeBrowserSafely } = require('./close-browser');
 
 /**
  * Rotate user agents based on current timestamp
@@ -137,10 +138,7 @@ async function scrapeLoans() {
 
       // Close browser with timeout to prevent
       // hanging on Windows
-      await Promise.race([
-        browser.close(),
-        new Promise((r) => setTimeout(r, 5000)),
-      ]);
+      await closeBrowserSafely(browser);
       return loans;
 
     } catch (err) {
@@ -150,16 +148,7 @@ async function scrapeLoans() {
       );
 
       if (browser) {
-        try {
-          await Promise.race([
-            browser.close(),
-            new Promise(
-              (r) => setTimeout(r, 3000)
-            ),
-          ]);
-        } catch {
-          // Ignore close errors
-        }
+        await closeBrowserSafely(browser, 3000);
       }
 
       if (attempt < MAX_RETRIES) {
