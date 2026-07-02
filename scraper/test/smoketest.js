@@ -1370,7 +1370,7 @@ function testWorkflowSchedule() {
   );
   // Speed optimizations
   assert.ok(
-    /actions\/cache@v4/.test(yml),
+    /actions\/cache@v[46]/.test(yml),
     'Workflow should cache node_modules'
   );
   assert.ok(
