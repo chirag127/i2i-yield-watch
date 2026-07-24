@@ -6,7 +6,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const admin = require('firebase-admin');
+// firebase-admin v14 removed the monolithic `admin.*` namespace (admin.credential
+// is undefined); use the modular subpath imports instead.
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const logger = require('../utils/logger');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -29,16 +32,16 @@ function init() {
     );
   }
   const sa = JSON.parse(fs.readFileSync(SA_PATH, 'utf8'));
-  app = admin.initializeApp(
-    { credential: admin.credential.cert(sa) },
+  app = initializeApp(
+    { credential: cert(sa) },
     'i2i-yield-watch'
   );
-  db = admin.firestore(app);
+  db = getFirestore(app);
   db.settings({ ignoreUndefinedProperties: true });
 }
 
 function ts() {
-  return admin.firestore.FieldValue.serverTimestamp();
+  return FieldValue.serverTimestamp();
 }
 
 /**
