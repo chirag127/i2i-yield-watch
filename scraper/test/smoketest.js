@@ -1342,15 +1342,25 @@ function testWorkflowSchedule() {
     ),
     'utf-8'
   );
-  // Every-5-min schedule aligned to IST marks.
-  // GitHub cron is in UTC; IST is UTC+5:30, so each
-  // IST :00, :05, :10 ... :55 maps to a different UTC
-  // minute. All 12 marks fall within the same hour
-  // and are combined in a single cron entry.
+  // Self-looping schedule (GitHub throttles high-freq cron to ~hourly).
+  // We ask for every 15 min (reliably honored) and self-loop N x 60s inside
+  // each run to approximate 5-min polling regardless of GitHub's cadence.
   assert.ok(
-    /cron:\s*'30,35,40,45,50,55,0,5,10,15,20,25 \* \* \* \*'/
+    /cron:\s*'3,18,33,48 \* \* \* \*'/
       .test(yml),
-    'Cron must include the every-5-min IST expression'
+    'Cron must be the every-15-min expression'
+  );
+  assert.ok(
+    /SCRAPE_ITERATIONS:\s*'\d+'/.test(yml),
+    'Workflow must set SCRAPE_ITERATIONS for the self-loop'
+  );
+  assert.ok(
+    /SCRAPE_INTERVAL_SECONDS:\s*'\d+'/.test(yml),
+    'Workflow must set SCRAPE_INTERVAL_SECONDS for the self-loop'
+  );
+  assert.ok(
+    /for i in \$\(seq 1 "\$\{SCRAPE_ITERATIONS\}"\)/.test(yml),
+    'Workflow scraper step must loop over SCRAPE_ITERATIONS'
   );
   assert.ok(
     /repository_dispatch:/.test(yml),
@@ -1361,8 +1371,8 @@ function testWorkflowSchedule() {
     'Workflow must NOT cancel in-progress runs'
   );
   assert.ok(
-    /timeout-minutes:\s*10/.test(yml),
-    'Workflow must set a 10-min timeout'
+    /timeout-minutes:\s*20/.test(yml),
+    'Workflow must set a 20-min timeout (self-loop needs headroom)'
   );
   assert.ok(
     /ubuntu-latest/.test(yml),
@@ -1423,7 +1433,7 @@ function testWorkflowSchedule() {
       || /GIT_CRYPT_KEY/.test(yml),
     'Workflow must unlock git-crypt in CI'
   );
-  ok('workflow schedule + shape: cron=5min-IST, dispatch, no-cancel, 10min, cached, playwright, git-crypt');
+  ok('workflow schedule + shape: cron=15min, self-loop, dispatch, no-cancel, 20min, cached, playwright, git-crypt');
 }
 
 function testProjectLayout() {
