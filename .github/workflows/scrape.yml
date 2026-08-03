@@ -2,9 +2,12 @@ name: i2i Yield Watch — Auto Scraper
 
 on:
   schedule:
-    # Every 5 minutes, aligned to IST quarter-fives.
-    # GitHub cron is in UTC; IST = UTC+5:30.
-    - cron: '30,35,40,45,50,55,0,5,10,15,20,25 * * * *'
+    # GitHub throttles/drops high-frequency cron; a `*/5` degrades to ~hourly.
+    # We ask for every 15 min (GitHub honors longer intervals far more
+    # reliably) and each run SELF-LOOPS ~5 scrapes x 60s internally (see the
+    # "Run scraper (self-looping)" step) to approximate 5-min polling even
+    # when GitHub fires sparsely. GitHub cron is UTC.
+    - cron: '3,18,33,48 * * * *'
   push:
     branches:
       - main
@@ -34,7 +37,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     outputs:
       data_changed: ${{ steps.check.outputs.changed }}
 
@@ -102,7 +105,7 @@ jobs:
         working-directory: scraper
         run: npx playwright install chromium --with-deps
 
-      - name: Run scraper
+      - name: Run scraper (self-looping)
         working-directory: scraper
         env:
           # Config is loaded from git-crypt-decrypted .env.
@@ -127,7 +130,31 @@ jobs:
           MEDIUM_PRIORITY_RATE_THRESHOLD: '50'
           NOTIFY_RATE_THRESHOLD: '50'
           STARTUP_JITTER_MS: '2000'
-        run: node src/core/index.js
+          # Self-loop: GitHub cron is unreliable at high frequency, so one run
+          # polls several times ~60s apart to approximate 5-min cadence even
+          # when GitHub fires only every 15-30 min. Each iteration diffs against
+          # the storage the previous iteration wrote, so notifications chain
+          # correctly and stay near-real-time.
+          SCRAPE_ITERATIONS: '5'
+          SCRAPE_INTERVAL_SECONDS: '60'
+        run: |
+          set +e
+          for i in $(seq 1 "${SCRAPE_ITERATIONS}"); do
+            echo "::group::scrape iteration $i/${SCRAPE_ITERATIONS}"
+            node src/core/index.js
+            code=$?
+            echo "iteration $i exit=$code"
+            echo "::endgroup::"
+            # Stop looping if the scraper hard-fails (exit 1) — surfaces the error.
+            if [ "$code" -ne 0 ]; then
+              echo "scraper failed on iteration $i (exit $code)"
+              exit "$code"
+            fi
+            # No sleep after the final iteration.
+            if [ "$i" -lt "${SCRAPE_ITERATIONS}" ]; then
+              sleep "${SCRAPE_INTERVAL_SECONDS}"
+            fi
+          done
 
       - name: Mark output
         id: check
