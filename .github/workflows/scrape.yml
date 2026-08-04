@@ -128,7 +128,7 @@ jobs:
           MAX_SHOW_MORE_CLICKS: '150'
           HIGH_PRIORITY_RATE_THRESHOLD: '70'
           MEDIUM_PRIORITY_RATE_THRESHOLD: '50'
-          NOTIFY_RATE_THRESHOLD: '50'
+          NOTIFY_RATE_THRESHOLD: '40'
           STARTUP_JITTER_MS: '2000'
           # Self-loop: GitHub cron is unreliable at high frequency, so one run
           # polls several times ~60s apart to approximate 5-min cadence even

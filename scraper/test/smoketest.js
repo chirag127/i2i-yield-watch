@@ -228,21 +228,24 @@ function testSortPriority() {
       > creditRank({ creditScoreNumeric: 900 }),
     'no-credit must outrank a perfect 900'
   );
-  // Priority: rate first, then credit (no-credit high), then rest.
+  // Priority: rate first, then income, then credit (no-credit high), then amount.
   const loans = [
-    { id: 'A', interestRate: 60, creditScoreNumeric: 800 },
-    { id: 'B', interestRate: 80, creditScoreNumeric: 400 },
-    { id: 'C', interestRate: 80, creditScoreNumeric: null },
-    { id: 'D', interestRate: 80, creditScoreNumeric: 700 },
+    { id: 'A', interestRate: 60, monthlyIncome: 90000, creditScoreNumeric: 800 },
+    { id: 'B', interestRate: 80, monthlyIncome: 50000, creditScoreNumeric: 400 },
+    { id: 'C', interestRate: 80, monthlyIncome: 50000, creditScoreNumeric: null },
+    { id: 'D', interestRate: 80, monthlyIncome: 50000, creditScoreNumeric: 700 },
+    { id: 'E', interestRate: 80, monthlyIncome: 90000, creditScoreNumeric: 400 },
   ];
+  // Expect: rate 80 group first; within it income 90k (E) beats income 50k
+  // (C/D/B); within the 50k group no-credit C > 700 D > 400 B; rate 60 (A) last.
   const order = sortLoans(loans).map((l) => l.id).join('');
   assert.strictEqual(
-    order, 'CDBA',
-    `expected rate-then-credit order CDBA, got ${order}`
+    order, 'ECDBA',
+    `expected rate>income>credit order ECDBA, got ${order}`
   );
   // Does not mutate input.
   assert.strictEqual(loans[0].id, 'A', 'sortLoans must not mutate input');
-  ok('sort priority: rate > credit (no-credit high) > rest');
+  ok('sort priority: rate > income > credit (no-credit high) > amount');
 }
 
 /* ============================================================

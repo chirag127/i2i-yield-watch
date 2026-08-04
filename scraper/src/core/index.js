@@ -140,7 +140,7 @@ async function main() {
     const rateThreshold = parseFloat(
       process.env.NOTIFY_RATE_THRESHOLD
       || process.env.MEDIUM_PRIORITY_RATE_THRESHOLD
-      || '50'
+      || '40'
     );
 
     const qualifyingLoans = activeLoans.filter(

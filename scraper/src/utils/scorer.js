@@ -174,10 +174,12 @@ function creditRank(loan) {
  * Strict multi-key comparator for loan priority (for Array.sort).
  * Priority order (each key only breaks ties of the previous one):
  *   1. Interest rate      (higher first)  — primary yield signal
- *   2. Credit rank        (higher first)  — no-credit ranks HIGH
- *   3. Funding remaining  (higher first)  — more room to invest
- *   4. Monthly income     (higher first)  — repayment capacity
- *   5. Loan amount        (higher first)  — final tiebreaker
+ *   2. Monthly income     (higher first)  — repayment capacity (ranked
+ *                                           ABOVE credit per user)
+ *   3. Credit rank        (higher first)  — no-credit ranks HIGH
+ *   4. Loan amount        (higher first)  — final tiebreaker
+ * Funding-remaining is intentionally NOT a sort key (per user: it is not a
+ * priority requirement — a nearly-funded high-rate loan still ranks high).
  * Nulls sort last within each numeric key (treated as -Infinity),
  * EXCEPT credit, where no-credit is deliberately ranked high.
  * @param {Object} a
@@ -191,14 +193,11 @@ function compareLoans(a, b) {
   const rate = num(b.interestRate) - num(a.interestRate);
   if (rate !== 0) return rate;
 
-  const credit = creditRank(b) - creditRank(a);
-  if (credit !== 0) return credit;
-
-  const funding = num(b.fundingRemaining) - num(a.fundingRemaining);
-  if (funding !== 0) return funding;
-
   const income = num(b.monthlyIncome) - num(a.monthlyIncome);
   if (income !== 0) return income;
+
+  const credit = creditRank(b) - creditRank(a);
+  if (credit !== 0) return credit;
 
   return num(b.loanAmount) - num(a.loanAmount);
 }
