@@ -3,6 +3,7 @@
 
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
+const { sortLoans } = require('../utils/scorer');
 const { formatLoanBlock } = require('../core/transform');
 
 let cachedTransporter = null;
@@ -115,9 +116,7 @@ function formatEmailHtml(
     ? options.rateThreshold
     : 50;
 
-  const sorted = [...loans].sort(
-    (a, b) => (b.interestRate || 0) - (a.interestRate || 0)
-  );
+  const sorted = sortLoans(loans);
 
   const cards = sorted.map(
     (l) => renderLoanCard(l, rateThreshold)

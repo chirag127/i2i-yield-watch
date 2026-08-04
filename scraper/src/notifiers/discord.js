@@ -17,6 +17,7 @@
 // the title is clickable. NO field labels.
 
 const logger = require('../utils/logger');
+const { sortLoans } = require('../utils/scorer');
 const { formatLoanBlock } = require('../core/transform');
 
 // Discord: 10 embeds per webhook message.
@@ -131,11 +132,7 @@ async function sendDiscord(
       : 50;
 
     // Sort by interest rate descending
-    const sorted = [...loans].sort(
-      (a, b) =>
-        (b.interestRate || 0)
-        - (a.interestRate || 0)
-    );
+    const sorted = sortLoans(loans);
 
     // Build all loan embeds
     const loanEmbeds = sorted.map(buildLoanEmbed);

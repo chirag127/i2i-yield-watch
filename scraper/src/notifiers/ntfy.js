@@ -17,6 +17,7 @@
 // and Discord; ntfy just renders plain text.
 
 const logger = require('../utils/logger');
+const { sortLoans } = require('../utils/scorer');
 const { formatLoanBlock } = require('../core/transform');
 
 const DEFAULT_BASE_URL = 'https://ntfy.sh';
@@ -138,10 +139,7 @@ async function sendNtfy(
   try {
     // Sort by interest rate descending so the best
     // opportunities appear first.
-    const sorted = [...loans].sort(
-      (a, b) => (b.interestRate || 0)
-        - (a.interestRate || 0)
-    );
+    const sorted = sortLoans(loans);
 
     // Build the full body — ntfy accepts long messages.
     const header = buildHeader(

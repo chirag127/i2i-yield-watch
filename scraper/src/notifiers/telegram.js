@@ -16,6 +16,7 @@
 // personal-loan narrative is purpose).
 
 const logger = require('../utils/logger');
+const { sortLoans } = require('../utils/scorer');
 const { formatLoanBlock } = require('../core/transform');
 
 // Telegram hard limit for a single text message
@@ -232,11 +233,7 @@ async function sendTelegram(
 
     // Sort by interest rate descending so the
     // best opportunities appear first.
-    const sorted = [...loans].sort(
-      (a, b) =>
-        (b.interestRate || 0)
-        - (a.interestRate || 0)
-    );
+    const sorted = sortLoans(loans);
 
     const header = buildHeader(
       sorted.length, stats, dashboardUrl, rateThreshold

@@ -83,6 +83,8 @@ const {
 const {
   calculateYieldScore,
   getPriority,
+  sortLoans,
+  creditRank,
 } = require('../src/utils/scorer');
 const {
   transformLoan,
@@ -213,6 +215,34 @@ function testYieldScoreBounds() {
     'score must be deterministic'
   );
   ok('yield score is in [0,100] and deterministic');
+}
+
+function testSortPriority() {
+  // no-credit ranks ABOVE any real score (user design choice)
+  assert.strictEqual(
+    creditRank({ creditScoreNumeric: null }), 1000,
+    'no-credit must rank 1000'
+  );
+  assert.ok(
+    creditRank({ creditScoreNumeric: null })
+      > creditRank({ creditScoreNumeric: 900 }),
+    'no-credit must outrank a perfect 900'
+  );
+  // Priority: rate first, then credit (no-credit high), then rest.
+  const loans = [
+    { id: 'A', interestRate: 60, creditScoreNumeric: 800 },
+    { id: 'B', interestRate: 80, creditScoreNumeric: 400 },
+    { id: 'C', interestRate: 80, creditScoreNumeric: null },
+    { id: 'D', interestRate: 80, creditScoreNumeric: 700 },
+  ];
+  const order = sortLoans(loans).map((l) => l.id).join('');
+  assert.strictEqual(
+    order, 'CDBA',
+    `expected rate-then-credit order CDBA, got ${order}`
+  );
+  // Does not mutate input.
+  assert.strictEqual(loans[0].id, 'A', 'sortLoans must not mutate input');
+  ok('sort priority: rate > credit (no-credit high) > rest');
 }
 
 /* ============================================================
@@ -1501,6 +1531,7 @@ function testProjectLayout() {
   t('rate filter', testRateFilter);
   t('priority thresholds', testPriorityThresholds);
   t('yield score bounds', testYieldScoreBounds);
+  t('sort priority', testSortPriority);
 
   console.log('--- Telegram & notifiers ---');
   t('telegram chunker', testTelegramChunker);

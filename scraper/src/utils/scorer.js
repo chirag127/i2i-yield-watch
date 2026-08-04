@@ -150,10 +150,75 @@ function getPriority(interestRate) {
   return 'LOW';
 }
 
+/**
+ * Credit-score rank for sorting. Higher rank = higher priority.
+ * Design choice (per user): a MISSING / "no credit history" score
+ * ranks HIGH — new-to-credit borrowers are FAVORED, not penalized.
+ * Among borrowers WITH a known score, higher score = higher rank.
+ *
+ * Returns a comparable number:
+ *   - no-credit  -> 1000  (above any real 300–900 score)
+ *   - known      -> the numeric score itself (300–900)
+ * @param {Object} loan
+ * @returns {number}
+ */
+function creditRank(loan) {
+  const s = loan.creditScoreNumeric;
+  if (s === null || s === undefined || isNaN(s)) {
+    return 1000; // no-credit ranks above the max real score (900)
+  }
+  return s;
+}
+
+/**
+ * Strict multi-key comparator for loan priority (for Array.sort).
+ * Priority order (each key only breaks ties of the previous one):
+ *   1. Interest rate      (higher first)  — primary yield signal
+ *   2. Credit rank        (higher first)  — no-credit ranks HIGH
+ *   3. Funding remaining  (higher first)  — more room to invest
+ *   4. Monthly income     (higher first)  — repayment capacity
+ *   5. Loan amount        (higher first)  — final tiebreaker
+ * Nulls sort last within each numeric key (treated as -Infinity),
+ * EXCEPT credit, where no-credit is deliberately ranked high.
+ * @param {Object} a
+ * @param {Object} b
+ * @returns {number}
+ */
+function compareLoans(a, b) {
+  const num = (v) =>
+    v === null || v === undefined || isNaN(v) ? -Infinity : Number(v);
+
+  const rate = num(b.interestRate) - num(a.interestRate);
+  if (rate !== 0) return rate;
+
+  const credit = creditRank(b) - creditRank(a);
+  if (credit !== 0) return credit;
+
+  const funding = num(b.fundingRemaining) - num(a.fundingRemaining);
+  if (funding !== 0) return funding;
+
+  const income = num(b.monthlyIncome) - num(a.monthlyIncome);
+  if (income !== 0) return income;
+
+  return num(b.loanAmount) - num(a.loanAmount);
+}
+
+/**
+ * Return a NEW array of loans sorted by compareLoans (does not mutate).
+ * @param {Object[]} loans
+ * @returns {Object[]}
+ */
+function sortLoans(loans) {
+  return [...loans].sort(compareLoans);
+}
+
 module.exports = {
   normalize,
   calculateYieldScore,
   getPriority,
+  compareLoans,
+  sortLoans,
+  creditRank,
   BOUNDS,
   WEIGHTS,
 };
