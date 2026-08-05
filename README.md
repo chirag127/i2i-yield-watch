@@ -114,41 +114,39 @@ JSON, always fresh.
                               │    (sets cookies)
                               ▼
                    ┌─────────────────────┐
-                   │ src/core/           │  ← primary
-                   │  api-intercept.js   │     ~5-15s
-                   │  (in-page fetch)    │     bypasses 502
+                   │ sources/i2i.py      │  ← primary
+                   │  (in-page fetch)    │     ~5-15s
+                   │                     │     bypasses 502
                    └──────────┬──────────┘
-                              │ if intercept throws…
+                              │ if intercept empty…
                               ▼
                    ┌─────────────────────┐
-                   │ src/browser/        │  ← fallback
-                   │   scraper.js        │  (Playwright)
-                   │   (DOM parse +      │
-                   │    Show More)       │
+                   │ sources/i2i.py      │  ← fallback
+                   │  (DOM Show More +   │  (Playwright)
+                   │   XHR capture)      │
                    └──────────┬──────────┘
                               │
                               ▼
                    ┌─────────────────────┐
-                   │ src/core/transform  │  (raw API/DOM → normal)
-                   │ formatLoanBlock()   │  (one 10-line block)
+                   │ transform.py        │  (raw API/DOM → normal)
+                   │ format_loan_block() │  (one 10-line block)
                    └──────────┬──────────┘
                               │
               ┌───────────────┼────────────────┐
               ▼               ▼                ▼
         ┌──────────┐   ┌──────────┐    ┌──────────┐
-        │ src/core │   │ src/     │    │ src/core │
-        │ storage  │   │ notifiers│    │ storage  │
-        │ (Firestore│  │ TG/Email/│    │ Firestore│
-        │  +loanId  │  │ Discord/ │    │ archive  │
-        │  dedup)  │   │ ntfy     │    │ (monthly)│
+        │ storage  │   │ notify/  │    │ storage  │
+        │ Firestore│   │ channels │    │ Firestore│
+        │ +loanId  │   │ TG /     │    │ archive  │
+        │  dedup   │   │ ntfy     │    │ (monthly)│
         └────┬─────┘   └────┬─────┘    └────┬─────┘
              │              │              │
              ▼              ▼              ▼
       ┌───────────────┐  ┌──────────┐
       │   Firestore   │  │ Telegram │
-      │  (Spark tier) │  │  / Gmail │
-      │               │  │  / Discord│
-      │               │  │  / ntfy  │
+      │  (Spark tier) │  │  / ntfy  │
+      │               │  │          │
+      │               │  │          │
       └──────┬────────┘  └──────────┘
              │
              ▼
@@ -166,15 +164,15 @@ the same `getActiveFilteredBorrowers` endpoint
 the site's own Angular SPA calls — but from
 inside the page context (`page.evaluate(fetch)`).
 This bypasses the 502 block that any direct
-Node.js `fetch` hits, and gives us clean JSON
+`httpx` call hits, and gives us clean JSON
 with more data than the DOM (real borrower name,
 `bloan_desc` purpose narrative, `nature_of_work`).
-Pages 1..N are paginated in parallel batches of 3.
-The legacy Playwright/DOM path is kept as a
-fallback (triggered automatically on API failure,
-or manually via `USE_PLAYWRIGHT_FALLBACK=true`)
-so the scraper keeps working even if the
-i2iFunding backend ever changes shape.
+Pages 1..N are paginated in batches of 3.
+The Playwright/DOM Show-More path is kept as a
+fallback (triggered automatically when the API
+intercept returns no rows) so the scraper keeps
+working even if the i2iFunding backend ever
+changes shape.
 
 ## 🏛️ Project Architecture
 
@@ -220,12 +218,12 @@ Key design choices:
 
 ## 📋 Notification Message Format
 
-Every channel (Telegram, Gmail, Discord, ntfy)
-renders the **same compact, label-free line list**
+Both channels (Telegram, ntfy)
+render the **same compact, label-free line list**
 built once by
-`scraper/src/core/transform.js → formatLoanBlock()`.
+`transform.py → format_loan_block()`.
 This keeps the channels consistent and the format
-easy to evolve — change the function, all four
+easy to evolve — change the function, both
 channels update.
 
 ### Example output
@@ -292,15 +290,6 @@ Lines appear in the order a lender would scan them:
   rest plain. Long lists auto-chunked into
   multiple messages (≤ 4096 chars each, 1.1s
   delay between sends).
-- **Gmail** — each loan becomes a card with a
-  rate-colored left border. The rate + yield line
-  is a large colored header; the remaining lines
-  stack as `<p>` rows.
-- **Discord** — first line becomes the embed title,
-  the rest become the embed description (joined
-  with `\n`). The URL line, when present, becomes
-  the embed URL so the title is clickable. 10
-  embeds per webhook call.
 - **ntfy** — all lines joined with `\n` into one
   push body. The push title shows the count +
   threshold.
@@ -375,13 +364,12 @@ Key properties:
   hidden", or "sent in full" are intentionally
   not used.
 - **Auto-chunked** — long lists are split into
-  multiple Telegram messages (≤ 4096 chars each)
-  or multiple Discord embeds (≤ 10 embeds per
-  webhook call). Telegram chunks respect the
+  multiple Telegram messages (≤ 4096 chars each).
+  Telegram chunks respect the
   1 msg/sec/chat bot rate limit with a small
   delay between sends.
-- **Channels** — Telegram, Gmail, Discord, and
-  ntfy.sh are all independent. Enable whichever
+- **Channels** — Telegram and
+  ntfy.sh are independent. Enable whichever
   you want via the `*_ENABLED` secrets.
 
 ## 🛠️ Setup Guide (Step by Step)
@@ -390,8 +378,6 @@ Key properties:
 
 - GitHub account (free)
 - For Telegram: Telegram account
-- For Email: Gmail account with 2FA enabled
-- For Discord: Discord server with webhook access
 - For ntfy.sh: nothing — the default
   `https://ntfy.sh` is free, anonymous, and needs
   no signup. Subscribe in the ntfy mobile/desktop
@@ -421,32 +407,7 @@ cd i2i-yield-watch
    - `TELEGRAM_CHAT_ID`
    - `TELEGRAM_ENABLED` = `true`
 
-### Step 3 — Set Up Gmail Notifications (Optional)
-
-1. Enable **2FA** on your Google account
-   ([Security Settings](https://myaccount.google.com/security))
-2. Go to
-   [App Passwords](https://myaccount.google.com/apppasswords)
-3. Create App Password for **"Mail"**
-4. Copy the **16-character password**
-5. Add to GitHub Secrets:
-   - `EMAIL_FROM` = `your_gmail@gmail.com`
-   - `EMAIL_APP_PASSWORD` = `16-char password`
-   - `EMAIL_TO` = `recipient@email.com`
-   - `EMAIL_ENABLED` = `true`
-
-### Step 4 — Set Up Discord Webhook (Optional)
-
-1. Open your Discord server
-2. **Server Settings** → **Integrations**
-   → **Webhooks** → **New Webhook**
-3. Name it `i2i Yield Watch`, select channel
-4. Click **Copy Webhook URL**
-5. Add to GitHub Secrets:
-   - `DISCORD_WEBHOOK_URL` = webhook URL
-   - `DISCORD_ENABLED` = `true`
-
-### Step 5 — Set Up ntfy.sh (Optional)
+### Step 3 — Set Up ntfy.sh (Optional)
 
 1. Pick a unique topic name — it acts as your
    shared password. Example:
@@ -468,7 +429,7 @@ cd i2i-yield-watch
      if you're using an access-controlled self-hosted
      ntfy
 
-### Step 6 — Add GitHub Secrets
+### Step 4 — Add GitHub Secrets
 
 Go to: **Repository** → **Settings** →
 **Secrets and Variables** → **Actions** →
@@ -481,12 +442,6 @@ Go to: **Repository** → **Settings** →
 | `TELEGRAM_ENABLED`      | No             | `"true"` or `"false"` |
 | `TELEGRAM_BOT_TOKEN`    | If Telegram    | From @BotFather |
 | `TELEGRAM_CHAT_ID`      | If Telegram    | Your chat ID |
-| `EMAIL_ENABLED`         | No             | `"true"` or `"false"` |
-| `EMAIL_FROM`            | If Email       | Gmail address |
-| `EMAIL_APP_PASSWORD`    | If Email       | 16-char App Password |
-| `EMAIL_TO`              | If Email       | Recipient email |
-| `DISCORD_ENABLED`       | No             | `"true"` or `"false"` |
-| `DISCORD_WEBHOOK_URL`   | If Discord     | Webhook URL |
 | `NTFY_ENABLED`          | No             | `"true"` or `"false"` |
 | `NTFY_TOPIC`            | If ntfy        | Your unique topic name (the shared "password") |
 | `NTFY_BASE_URL`         | No             | `https://ntfy.sh` (default) or your self-hosted URL |
@@ -501,7 +456,7 @@ Go to: **Repository** → **Settings** →
 > git-crypt symmetric mode and committed to the
 > repo. CI unlocks it automatically.
 
-### Step 7 — Enable GitHub Pages
+### Step 5 — Enable GitHub Pages
 
 1. Repository → **Settings** → **Pages**
 2. Source: **GitHub Actions**
@@ -509,7 +464,7 @@ Go to: **Repository** → **Settings** →
    be live at:
    `https://YOUR_USERNAME.github.io/i2i-yield-watch/`
 
-### Step 8 — Enable GitHub Actions
+### Step 6 — Enable GitHub Actions
 
 1. Repository → **Actions** tab
 2. Click **"Enable Actions"** if prompted
@@ -540,7 +495,7 @@ Go to: **Repository** → **Settings** →
 > trigger on event type `tick` for an external
 > cron fallback (see Troubleshooting below).
 
-### Step 9 — Update Dashboard URL Secret
+### Step 7 — Update Dashboard URL Secret
 
 After your first deployment, update the
 `DASHBOARD_URL` secret with your actual
@@ -706,11 +661,11 @@ default `./i2i-yield-watch-sa.json`). Set
 
 ### One-time data migration
 
-If you fork this repo and want to seed your own
-Firestore with historical data, see
-`scraper/test/migrate_to_firestore.js` — it's a
-one-time script that reads from JSON files and
-bulk-writes to Firestore in 500-doc batches.
+To seed your own Firestore with historical data,
+write the docs directly with the `firebase-admin`
+SDK (500-doc batches) — the scraper's
+`storage.save_active_loans` already uses the same
+batched-write pattern.
 
 ## ⚙️ Configuration
 
@@ -722,11 +677,8 @@ All configuration is via environment variables
 | `NOTIFY_RATE_THRESHOLD`        | `50`    | Strictly-greater rate gate for **notifications** (each unique loan is announced once) |
 | `HIGH_PRIORITY_RATE_THRESHOLD` | `70`    | Min rate for VERY_HIGH priority |
 | `MEDIUM_PRIORITY_RATE_THRESHOLD` | `50`  | Min rate for MEDIUM priority |
-| `MAX_SHOW_MORE_CLICKS`         | `150`   | Safety limit for Playwright Show More clicks (fallback only) |
-| `USE_PLAYWRIGHT_FALLBACK`      | `false` | Force the legacy Playwright/DOM path instead of the in-browser API intercept |
+| `STARTUP_JITTER_MS`            | `2000`  | Random 0–N ms startup jitter to spread CI load |
 | `TELEGRAM_ENABLED`             | `false` | Enable Telegram channel |
-| `EMAIL_ENABLED`                | `false` | Enable Gmail SMTP channel |
-| `DISCORD_ENABLED`              | `false` | Enable Discord webhook channel |
 | `NTFY_ENABLED`                 | `false` | Enable ntfy.sh channel |
 | `DASHBOARD_URL`                | —       | Your GitHub Pages URL |
 
@@ -838,8 +790,6 @@ endpoint:
   one loan with `interestRate > NOTIFY_RATE_THRESHOLD`
 - For Telegram: ensure you started the bot
   with `/start`
-- For Email: ensure 2FA is on and you're using an
-  App Password (not your account password)
 - For ntfy: check the topic is correct and you
   are subscribed on the device that should
   receive the push
@@ -854,13 +804,15 @@ endpoint:
 
 ### Scraper fails with timeout
 - The site may be temporarily down
-- The fast path (pure HTTP) will fail → the
+- The in-page API path will fail → the
   scraper auto-falls back to the Playwright
-  DOM path. If both fail, GitHub Actions will
-  retry on the next scheduled tick.
+  DOM Show-More path. If both fail, the whole
+  session retries up to 3x, then GitHub Actions
+  retries on the next scheduled tick.
 - Check if the site structure has changed
-  (compare scraper/src/browser/parser.js
-  selectors against the live page)
+  (the `getActiveFilteredBorrowers` endpoint or
+  the "Show More" button in
+  `src/i2i_watch/sources/i2i.py`)
 
 ### git-crypt not unlocking in CI
 - Verify the `GIT_CRYPT_KEY` secret is set and
@@ -889,13 +841,11 @@ endpoint:
 
 ## 🛠️ Skills & Tools Used
 
-- **playwright** — powers both the primary
-  in-browser API path (`scraper/src/core/api-intercept.js`)
-  and the legacy DOM fallback
-  (`scraper/src/browser/`)
-- **webapp-testing** — used during initial
-  development to verify the live i2iFunding page
-  structure and selectors
+- **playwright (Python)** — powers both the primary
+  in-browser API path and the DOM Show-More fallback
+  in `src/i2i_watch/sources/i2i.py`
+- **httpx** — Telegram + ntfy HTTP delivery
+- **firebase-admin** — Firestore persistence
 
 ## ⚡ Speed Optimizations
 
@@ -907,57 +857,45 @@ Firestore batched writes.
 
 | Optimization                            | Saves         | Where |
 |-----------------------------------------|---------------|-------|
-| `actions/cache@v4` for `node_modules`   | ~10-20s on warm runs | keyed on `scraper/package-lock.json` |
+| `actions/setup-python` pip cache        | ~10-20s on warm runs | keyed on `pyproject.toml` |
 | `actions/cache` for Playwright Chromium | ~60s on warm runs | (warm cache → ~5s install) |
 | Shallow checkout (`fetch-depth: 1`)     | ~5-10s        | First `actions/checkout` step |
-| `npm ci --prefer-offline --no-audit`    | ~2-5s         | Cached tarball resolution, skips audit metadata fetch |
-| In-page API fetch (vs. DOM parse)       | ~25-50s/run   | `scraper/src/core/api-intercept.js` — single JSON, no selectors |
-| Startup jitter (0–2s)                   | spreads load  | `STARTUP_JITTER_MS` (default 2000) in `main()` |
-| Parallel in-page API page fetch (3/batch) | ~2-5s on large catalogs | `scraper/src/core/api-intercept.js` |
-| Parallel notification channels          | ~1–3s         | `scraper/src/notifiers/notifier.js` |
-| Firestore batched writes (500/batch)    | ~1–3s on large catalogs | `scraper/src/core/storage.js` |
+| In-page API fetch (vs. DOM parse)       | ~25-50s/run   | `src/i2i_watch/sources/i2i.py` — single JSON, no selectors |
+| Startup jitter (0–2s)                   | spreads load  | `STARTUP_JITTER_MS` (default 2000) in `pipeline.run()` |
+| Batched in-page API page fetch (3/batch) | ~2-5s on large catalogs | `src/i2i_watch/sources/i2i.py` |
+| Firestore batched writes (500/batch)    | ~1–3s on large catalogs | `src/i2i_watch/storage.py` |
 | `concurrency.cancel-in-progress: false` | no dropped ticks | Queueing instead of cancelling |
 
 The Playwright install is **unconditional** in CI
 (per project policy — fallback must be hot). On
 warm cache it's ~5 seconds; on cold cache it's
-~60 seconds. The previous workflow's
-`if: env.USE_PLAYWRIGHT_FALLBACK == 'true'` gate
-has been removed: even when the fast path is used
-on the happy day, we want the browser ready for
-the next 5-min tick that hits the API fallback.
+~60 seconds. Even when the API fast path succeeds
+on the happy day, the browser stays ready for the
+next tick that needs the DOM fallback.
 
 ## 🧪 Testing
 
-Two no-network test suites ship with the repo:
+An offline, no-network pytest suite ships with the repo:
 
 ```bash
-cd scraper
-npm test                   # smoketest + syntax checks
-node test/smoketest.js     # offline smoke tests
-node test/verify_syntax.js # parse checks for all source files
+pip install -e ".[dev]"
+python -m pytest -q
 ```
 
-The smoke test covers:
-- **Rate filter & scoring** — `>50` filter, priority
-  bands, yield score bounds
-- **Notifiers (Telegram / Email / Discord / ntfy)**
-  — chunker, N/A omission, label-free line list,
-  ntfy body shape, ntfy disabled, ntfy missing
-  topic, no promo copy
-- **Loan ID & dedup** — `loanId` from `pl_bloan_id`,
-  `filterUnnotified`, idempotent `markNotificationsSent`,
-  no SHA-1 fingerprinting
-- **API payload (no network)** — `buildFilterBody`
-  JSON, `fetchPage` POST + headers, constants
-- **Transform** — 14 helpers + 10-line block + silent
-  optional omission
-- **Workflow & layout** — cron = 5-min IST, dispatch,
-  no-cancel, 10-min, cached, unconditional Playwright,
-  git-crypt, SOLID folder structure, single README,
-  encrypted `.env`, Firestore storage
+The suite covers:
+- **Scorer** — yield-score neutrality (no-credit never
+  penalized), rate as primary sort key, income → credit
+  → amount tiebreaks, no-input mutation
+- **loanId dedup** — new-loan detection, `filter_unnotified`,
+  int/str id normalization, archive detection
+- **Notifiers (Telegram / ntfy)** — bold+clickable first
+  line, no field labels, URL not repeated, HTML escaping,
+  no-op without env creds
+- **Parser** — raw API rows → normalized loan dict against
+  a captured fixture; data shape the dashboard reads,
+  No-History sentinel, funding math, fully-funded flag
 
-Run them locally before pushing. CI runs `npm test`
+Run locally before pushing. CI runs `python -m pytest -q`
 before every scrape on `main`, scheduled ticks, and
 manual dispatch.
 

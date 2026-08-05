@@ -6,11 +6,11 @@ requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28",
     "selectolax>=0.3.25",
-    "firebase-admin>=6.5",
 ]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.50"]
+firebase = ["firebase-admin>=6.5"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

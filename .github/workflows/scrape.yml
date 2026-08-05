@@ -54,7 +54,7 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[browser,dev]"
+          pip install -e ".[browser,firebase,dev]"
 
       - name: Run tests
         run: python -m pytest -q
