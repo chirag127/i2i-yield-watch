@@ -8,7 +8,7 @@
 > loans by yield potential, and dispatches a compact
 > label-free line list the first time a loan crosses
 > the high-yield threshold (rate > 50%) to
-> **Telegram, Gmail, Discord, and ntfy.sh**. Each
+> **Telegram and ntfy.sh**. Each
 > unique loan is announced exactly once. State lives
 > in **Cloud Firestore** (free, unlimited projects)
 > — no JSON files in the repo, no static data.
@@ -21,19 +21,19 @@
   every **5 minutes** via GitHub Actions
   (aligned to IST :00, :05, :10, ..., :55)
 - ⚡ **In-Browser API Fetch** — A single
-  Playwright session opens the listing
-  page, then `page.evaluate(fetch)` calls
-  the same `getActiveFilteredBorrowers`
+  Playwright (Python) session opens the
+  listing page, then `page.evaluate(fetch)`
+  calls the same `getActiveFilteredBorrowers`
   endpoint the i2iFunding Angular SPA
   uses. The browser context bypasses the
-  502 block that direct Node.js `fetch`
+  502 block that a direct `httpx` call
   hits, and we get clean JSON with more
   data than the DOM (real borrower name,
   purpose narrative, nature-of-work, etc.).
   ~5-15 seconds for 20 loans.
 - 🛡️ **Resilient** — The in-browser API
-  path automatically falls back to the
-  legacy Playwright/DOM path if the API
+  path automatically falls back to a
+  Playwright/DOM Show-More path if the API
   ever changes shape or returns an error.
   Playwright is **always installed** in CI
   (cached for ~5s on warm runs) so the
@@ -46,15 +46,15 @@
   static JSON, always fresh.
 - 🔥 **Yield Scoring** — Custom 0–100 opportunity
   score (higher interest = better)
-- 🔔 **New-Loan-Only Alerts** — Telegram, Gmail,
-  Discord, **and ntfy.sh** notifications fire
+- 🔔 **New-Loan-Only Alerts** — Telegram
+  and **ntfy.sh** notifications fire
   only for loans with interest rate **strictly
   above 50%** (configurable). Each unique loan
   is **announced exactly once**.
-- 📋 **Label-Free Line List** — Every channel
-  (Telegram, Gmail, Discord, ntfy) renders the
+- 📋 **Label-Free Line List** — Both channels
+  (Telegram, ntfy) render the
   same compact 10-line block built once by
-  `formatLoanBlock()`: rate + yield at the top,
+  `format_loan_block()`: rate + yield at the top,
   identity, funding, credit, borrower,
   employment, income, purpose, date, URL. No
   field labels, no `%` in the funding breakdown
@@ -66,11 +66,12 @@
   `flydiverny/setup-git-crypt@v5` +
   `GIT_CRYPT_KEY` secret. No scattered GitHub
   Secrets, no leaked tokens in history.
-- 🏛️ **SOLID Architecture** — Cleanly folderized
-  into `core/`, `notifiers/`, `utils/`, `browser/`,
-  and `test/` layers. The line list is built
-  **once** (`formatLoanBlock`) and rendered by all
-  four channels, so format changes ripple to every
+- 🏛️ **Clean Architecture** — Python package
+  `src/i2i_watch/` split into `sources/`,
+  `notify/`, `scorer`, `transform`, `storage`,
+  `pipeline`, and `tests/`. The line list is built
+  **once** (`format_loan_block`) and rendered by both
+  channels, so format changes ripple to every
   channel in one PR.
 - 📁 **Historical Data** — Monthly archives of
   funded loans in Firestore, queried per-month
@@ -175,66 +176,47 @@ or manually via `USE_PLAYWRIGHT_FALLBACK=true`)
 so the scraper keeps working even if the
 i2iFunding backend ever changes shape.
 
-## 🏛️ Project Architecture (SOLID)
+## 🏛️ Project Architecture
 
-The scraper follows **SOLID principles** with a
-clean folderized structure:
+The scraper is a Python package with a clean,
+layered structure:
 
 ```
-scraper/
-├── src/
-│   ├── core/            ← business logic
-│   │   ├── api.js         ← legacy pure-HTTP fetcher (always 502s; kept for reference)
-│   │   ├── api-intercept.js ← primary in-browser API fetcher (Playwright + page.evaluate)
-│   │   ├── transform.js   ← normalization + formatLoanBlock
-│   │   ├── storage.js     ← Firestore I/O + loanId dedup
-│   │   └── index.js       ← orchestrator (main entry)
-│   ├── notifiers/       ← presentation (one file per channel)
-│   │   ├── telegram.js
-│   │   ├── email.js
-│   │   ├── discord.js
-│   │   ├── ntfy.js
-│   │   └── notifier.js  ← multi-channel dispatcher
-│   ├── utils/           ← stateless helpers
-│   │   ├── logger.js
-│   │   └── scorer.js
-│   └── browser/         ← Playwright DOM fallback (last resort)
-│       ├── scraper.js
-│       ├── parser.js
-│       └── showmore.js
-├── test/                ← smoke + syntax tests
-│   ├── smoketest.js     ← offline smoke tests
-│   ├── verify_syntax.js
-│   ├── verify-intercept.js   ← real i2iFunding intercept smoke test
-│   ├── verify-real-telegram.js ← real end-to-end (intercept → Telegram)
-│   └── send_test_telegram.js  ← synthetic Telegram test
-├── package.json
-└── node_modules/        ← gitignored
+src/i2i_watch/
+├── sources/
+│   └── i2i.py           ← Playwright in-page API fetch + Show-More fallback
+├── notify/
+│   └── channels.py      ← Telegram + ntfy (label-free block, env-gated)
+├── scorer.py            ← yield score + strict multi-key sort
+├── transform.py         ← raw row → normalized loan + format_loan_block
+├── storage.py           ← Firestore I/O + pure loanId dedup helpers
+├── pipeline.py          ← orchestrator (fetch → detect → save → notify)
+└── __main__.py          ← self-loop CLI (--iterations --interval)
+tests/                   ← pytest (scorer, dedup, notify, parser fixture)
+pyproject.toml           ← deps + pytest pythonpath=src
 ```
 
 Key design choices:
 
 - **Single source of truth for messages** — the
-  same `formatLoanBlock(loan)` function in
-  `src/core/transform.js` builds the 10-line block
-  that **every** channel renders. Change the order
-  or add a field once, and all four channels
-  (Telegram, Email, Discord, ntfy) update
+  same `format_loan_block(loan)` function in
+  `transform.py` builds the 10-line block
+  that **both** channels render. Change the order
+  or add a field once, and Telegram + ntfy update
   automatically.
-- **Interface segregation** — every notifier
-  exports a single `send*(loans, stats, url, opts)`
-  function with the same signature. The dispatcher
-  in `notifier.js` calls each enabled one
-  independently; a single channel failure does not
-  affect the others.
-- **Dependency inversion** — `core/` and `utils/`
-  have no dependencies on `notifiers/`. The notifier
-  layer imports core (transform), never the other
-  way around.
-- **No `crypto`** — fingerprinting is gone. Dedup
-  is a single Firestore collection
+- **Channels are independent** — `send_telegram`
+  and `send_ntfy` share the same
+  `(loans, stats, url, rate_threshold)` signature.
+  The dispatcher in `notify/channels.py` calls each
+  enabled one independently; a single channel
+  failure does not affect the other.
+- **Pure, testable core** — `scorer`, `transform`,
+  and the `detect_*` / `filter_unnotified` storage
+  helpers need no Firestore and are unit-tested
+  directly.
+- **loanId dedup** — a single Firestore collection
   (`/notifications/{loanId}`) with the `loanId` as
-  the doc ID.
+  the doc ID. No fingerprinting.
 
 ## 📋 Notification Message Format
 
@@ -768,25 +750,21 @@ git-crypt unlock /path/to/git-crypt-key
 cp .env.example .env
 # Edit .env with your credentials
 
-# 3. Install scraper dependencies
-cd scraper
-npm install
+# 3. Install the package (+ browser + dev extras)
+pip install -e ".[browser,dev]"
 
 # 4. Install Playwright browser
 # The primary in-browser API path requires
 # Chromium. The DOM fallback also needs it.
-npx playwright install chromium
+python -m playwright install chromium
 
-# 5. Run the scraper (default: in-browser API path)
-node src/core/index.js
-# Or force the legacy DOM/Playwright path:
-USE_PLAYWRIGHT_FALLBACK=true node src/core/index.js
+# 5. Run the scraper (one cycle)
+python -m i2i_watch -v
+# Or self-loop ~5 times, 60s apart (CI cadence):
+python -m i2i_watch --iterations 5 --interval 60 -v
 
-# 6. (Optional) Real end-to-end smoke tests
-node test/smoketest.js
-node test/verify_syntax.js
-node test/verify-intercept.js   # real i2iFunding intercept
-node test/verify-real-telegram.js  # real Telegram send
+# 6. Run tests (offline, no network)
+python -m pytest -q
 ```
 
 To view the dashboard locally, serve the project
@@ -899,15 +877,15 @@ endpoint:
 
 | Component              | Technology |
 |------------------------|------------|
-| Scraper (primary)      | Node.js + Playwright + in-page `fetch()` |
-| Scraper (fallback)     | Node.js + Playwright + DOM parse |
+| Scraper (primary)      | Python + Playwright + in-page `fetch()` |
+| Scraper (fallback)     | Python + Playwright + DOM Show-More |
 | Scheduler              | GitHub Actions (cron) |
 | Database               | Cloud Firestore (Spark tier) |
 | Secrets                | git-crypt symmetric OR GitHub Secrets |
 | Dashboard              | HTML + CSS + Vanilla JS + Firebase JS SDK |
 | Charts                 | Chart.js 4.5.1 |
 | Hosting                | GitHub Pages |
-| Notifications          | Telegram + Gmail + Discord + ntfy.sh |
+| Notifications          | Telegram + ntfy.sh |
 
 ## 🛠️ Skills & Tools Used
 
