@@ -65,3 +65,34 @@ def test_notify_all_all_channels_off_by_default(monkeypatch):
     results = ch.notify_all([LOAN], {}, "https://d/", 40)
     assert results == {"telegram": False, "ntfy": False}
     assert ch.was_any_channel_successful(results) is False
+
+
+def test_enabled_gate_is_lenient(monkeypatch):
+    for val in ("true", "TRUE", "True", "1", "yes", "on", " true "):
+        monkeypatch.setenv("TELEGRAM_ENABLED", val)
+        assert ch._enabled("TELEGRAM_ENABLED") is True
+    for val in ("false", "0", "no", "off", ""):
+        monkeypatch.setenv("TELEGRAM_ENABLED", val)
+        assert ch._enabled("TELEGRAM_ENABLED") is False
+
+
+def test_notify_all_telegram_gate_accepts_nonlowercase(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ENABLED", "TRUE")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("NTFY_ENABLED", raising=False)
+    # gate passes -> send_telegram runs, then no-ops False without token/chat
+    calls = {}
+    orig = ch.send_telegram
+    def spy(*a, **k):
+        calls["ran"] = True
+        return orig(*a, **k)
+    monkeypatch.setattr(ch, "send_telegram", spy)
+    ch.notify_all([LOAN], {}, "https://d/", 40)
+    assert calls.get("ran") is True
+
+
+def test_header_says_high_yield_not_new():
+    hdr = ch.build_header(3, 40)
+    assert "HIGH-YIELD LOANS" in hdr
+    assert "rate &gt; 40%" in hdr

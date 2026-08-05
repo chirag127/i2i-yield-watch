@@ -8,7 +8,7 @@ import logging
 import os
 import random
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import storage
 from .notify.channels import notify_all, was_any_channel_successful
@@ -24,6 +24,34 @@ def _rate_threshold() -> float:
         or os.environ.get("MEDIUM_PRIORITY_RATE_THRESHOLD")
         or "40"
     )
+
+
+def _digest_hours() -> float:
+    """Notify at least once per N hours even when the qualifying set is
+    unchanged. 0/unset = disabled (change-only). Accepts I2I_DIGEST_HOURS, or
+    I2I_DIGEST=true as a 24h shortcut.
+    """
+    raw = os.environ.get("I2I_DIGEST_HOURS", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            log.warning("I2I_DIGEST_HOURS=%r not a number — ignoring", raw)
+    if os.environ.get("I2I_DIGEST", "").strip().lower() in ("1", "true", "yes", "on"):
+        return 24.0
+    return 0.0
+
+
+def _digest_due(prev_notified_at: str | None, hours: float) -> bool:
+    if hours <= 0:
+        return False
+    if not prev_notified_at:
+        return True
+    try:
+        prev = datetime.fromisoformat(str(prev_notified_at).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return datetime.now(timezone.utc) - prev >= timedelta(hours=hours)
 
 
 def run(raw_rows: list[dict] | None = None) -> dict:
@@ -55,32 +83,64 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     qualifying = [
         ln for ln in active if (ln.get("interestRate") is not None and ln["interestRate"] > threshold)
     ]
-    new_qualifying = storage.filter_unnotified(qualifying, notified)
+    qual_ids = {str(ln["loanId"]) for ln in qualifying}
+
+    prev_state = storage.load_notify_state()
+    prev_ids = {str(x) for x in prev_state.get("qualifyingIds", [])}
+    new_ids = qual_ids - prev_ids
+    dropped_ids = prev_ids - qual_ids
+    changed = bool(new_ids or dropped_ids)
+    digest_hours = _digest_hours()
+    digest_due = _digest_due(prev_state.get("notifiedAt"), digest_hours)
+
     log.info(
-        "qualifying (rate > %g%%): %d, new: %d",
+        "qualifying (rate > %g%%): %d (new=%d dropped=%d) changed=%s digest_due=%s",
         threshold,
         len(qualifying),
-        len(new_qualifying),
+        len(new_ids),
+        len(dropped_ids),
+        changed,
+        digest_due,
     )
 
     results = {"telegram": False, "ntfy": False}
-    if new_qualifying:
+    should_notify = (changed and qualifying) or (digest_due and qualifying)
+    if should_notify:
+        why = "change" if changed else "digest"
+        log.info(
+            "notifying %d qualifying loans (reason=%s, new=%d dropped=%d)",
+            len(qualifying),
+            why,
+            len(new_ids),
+            len(dropped_ids),
+        )
         dashboard_url = os.environ.get(
             "DASHBOARD_URL", "https://chirag127.github.io/i2i-yield-watch/"
         )
         stats = {
             "activeCount": len(active),
             "qualifyingCount": len(qualifying),
-            "newQualifyingCount": len(new_qualifying),
+            "newQualifyingCount": len(new_ids),
+            "droppedCount": len(dropped_ids),
             "rateThreshold": threshold,
         }
-        results = notify_all(new_qualifying, stats, dashboard_url, threshold)
+        results = notify_all(qualifying, stats, dashboard_url, threshold)
         if was_any_channel_successful(results):
-            storage.mark_notifications_sent([str(ln["loanId"]) for ln in new_qualifying])
+            storage.save_notify_state(sorted(qual_ids))
+            storage.mark_notifications_sent(sorted(qual_ids))
+            log.info("sent: %d loans, notify-state updated", len(qualifying))
         else:
-            log.warning("no channel succeeded — loanIds NOT marked, will retry next run")
+            log.warning("no channel succeeded — notify-state NOT updated, will retry next run")
+    elif qualifying:
+        log.info(
+            "qualifying set unchanged (%d loans) and no digest due — staying silent",
+            len(qualifying),
+        )
     else:
-        log.info("no new high-yield loans — skipping notifications")
+        log.info("no qualifying loans — nothing to notify")
+        if changed:
+            # set went non-empty -> empty; record so we don't re-fire on next run
+            storage.save_notify_state([])
 
     completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     summary = {
@@ -91,18 +151,20 @@ def run(raw_rows: list[dict] | None = None) -> dict:
         "newLoans": len(new_loans),
         "loansArchived": archived,
         "qualifyingLoans": len(qualifying),
-        "newQualifyingLoans": len(new_qualifying),
+        "newQualifyingLoans": len(new_ids),
+        "droppedQualifyingLoans": len(dropped_ids),
         "rateThreshold": threshold,
         "errors": [],
         "notificationsSent": results,
     }
     storage.append_changelog(summary)
     log.info(
-        "run complete: active=%d new=%d archived=%d qualifying=%d notified=%d",
+        "run complete: active=%d new=%d archived=%d qualifying=%d newQ=%d droppedQ=%d",
         len(active),
         len(new_loans),
         archived,
         len(qualifying),
-        len(new_qualifying),
+        len(new_ids),
+        len(dropped_ids),
     )
     return summary

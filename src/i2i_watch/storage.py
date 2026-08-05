@@ -334,6 +334,33 @@ def filter_unnotified(loans: list[dict], notified_ids) -> list[dict]:
     return [ln for ln in loans if str(ln["loanId"]) not in seen]
 
 
+def load_notify_state() -> dict:
+    """Last notification snapshot: {qualifyingIds:[...], notifiedAt:iso}.
+
+    Used to notify on qualifying-set CHANGES (loan appears/drops) + drive the
+    periodic digest. JSON backend only keeps a single doc; firebase mirrors it
+    under meta/notifyState.
+    """
+    init()
+    default = {"qualifyingIds": [], "notifiedAt": None}
+    if _mode == "json":
+        return _load_json("notify-state.json", default)
+    doc = _db.collection("meta").document("notifyState").get()
+    return doc.to_dict() if doc.exists else default
+
+
+def save_notify_state(qualifying_ids: list[str], notified_at: str | None = None) -> None:
+    init()
+    payload = {
+        "qualifyingIds": sorted({str(x) for x in qualifying_ids}),
+        "notifiedAt": notified_at or _now_iso(),
+    }
+    if _mode == "json":
+        _write_json("notify-state.json", {**payload, "updatedAt": payload["notifiedAt"]})
+        return
+    _db.collection("meta").document("notifyState").set({**payload, "updatedAt": _ts()})
+
+
 def update_stats(active: list[dict], newly_archived: int = 0) -> None:
     init()
     if _mode == "json":

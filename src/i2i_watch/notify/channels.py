@@ -47,9 +47,14 @@ def format_loan_line(loan: dict) -> str:
     return "\n".join(out)
 
 
+def _enabled(name: str) -> bool:
+    """Lenient enable gate: any truthy-ish value counts as on."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def build_header(count: int, rate_threshold: float) -> str:
     plural = "" if count == 1 else "S"
-    return f"🚨 <b>{count} NEW LOAN{plural} (rate &gt; {rate_threshold:g}%)</b>\n\n"
+    return f"🚨 <b>{count} HIGH-YIELD LOAN{plural} (rate &gt; {rate_threshold:g}%)</b>\n\n"
 
 
 def build_footer(stats: dict, dashboard_url: str) -> str:
@@ -131,7 +136,7 @@ def format_loan_body(loan: dict) -> str:
 def send_ntfy(
     loans: list[dict], stats: dict, _dashboard_url: str = "", rate_threshold: float = 50.0
 ) -> bool:
-    if os.environ.get("NTFY_ENABLED", "").strip().lower() != "true":
+    if not _enabled("NTFY_ENABLED"):
         return False
     topic = os.environ.get("NTFY_TOPIC", "").strip()
     if not topic:
@@ -144,8 +149,8 @@ def send_ntfy(
 
     sorted_loans = sort_loans(loans)
     plural = "" if len(sorted_loans) == 1 else "s"
-    title = f"i2i Yield Watch — {len(sorted_loans)} new loan{plural} (rate > {rate_threshold:g}%)"
-    header = f"🚨 {len(sorted_loans)} NEW LOAN{'' if len(sorted_loans) == 1 else 'S'} (rate > {rate_threshold:g}%)\n\n"
+    title = f"i2i Yield Watch — {len(sorted_loans)} high-yield loan{plural} (rate > {rate_threshold:g}%)"
+    header = f"🚨 {len(sorted_loans)} HIGH-YIELD LOAN{'' if len(sorted_loans) == 1 else 'S'} (rate > {rate_threshold:g}%)\n\n"
     blocks = "\n\n---\n\n".join(format_loan_body(ln) for ln in sorted_loans)
     footer = f"\n\n📊 Active: {(stats or {}).get('activeCount', 0)}"
     body = header + blocks + footer
@@ -176,10 +181,10 @@ def notify_all(
     if not loans:
         log.info("notify: no qualifying loans")
         return results
-    if os.environ.get("TELEGRAM_ENABLED", "").strip().lower() == "true":
+    if _enabled("TELEGRAM_ENABLED"):
         results["telegram"] = send_telegram(loans, stats, dashboard_url, rate_threshold)
     else:
-        log.info("notify: telegram disabled")
+        log.info("notify: telegram disabled (TELEGRAM_ENABLED not truthy)")
     results["ntfy"] = send_ntfy(loans, stats, dashboard_url, rate_threshold)
     log.info("notification results: %s", results)
     return results
