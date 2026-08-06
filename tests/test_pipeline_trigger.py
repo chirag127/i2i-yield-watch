@@ -71,17 +71,18 @@ def test_unchanged_set_stays_silent(json_backend, capture_notify):
     assert capture_notify == [["1"]]  # only once
 
 
-def test_new_qualifying_loan_notifies(json_backend, capture_notify):
+def test_new_qualifying_loan_notifies_new_only(json_backend, capture_notify):
     pipeline.run(raw_rows=[_loan("1", 50)])
     pipeline.run(raw_rows=[_loan("1", 50), _loan("2", 60)])
-    assert capture_notify == [["1"], ["1", "2"]]  # re-fires with full set
+    assert capture_notify == [["1"], ["2"]]  # new-only: never re-send loan 1
+    assert storage.load_notify_state()["qualifyingIds"] == ["1", "2"]
 
 
-def test_dropped_qualifying_loan_notifies(json_backend, capture_notify):
+def test_dropped_qualifying_loan_stays_silent(json_backend, capture_notify):
     pipeline.run(raw_rows=[_loan("1", 50), _loan("2", 60)])
-    pipeline.run(raw_rows=[_loan("1", 50)])  # 2 dropped
-    assert len(capture_notify) == 2
-    assert capture_notify[1] == ["1"]
+    pipeline.run(raw_rows=[_loan("1", 50)])  # 2 dropped, no new
+    assert capture_notify == [["1", "2"]]  # no notify on drop-only
+    assert storage.load_notify_state()["qualifyingIds"] == ["1"]  # state updated
 
 
 def test_digest_forces_send_when_unchanged(json_backend, capture_notify, monkeypatch):

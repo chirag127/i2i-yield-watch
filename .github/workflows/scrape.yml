@@ -106,6 +106,19 @@ jobs:
           # so notifications chain correctly and stay near-real-time.
         run: python -m i2i_watch --iterations 5 --interval 60 -v
 
+      - name: Commit updated data (state persistence — dedup across runs)
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "no data change"
+          else
+            git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')"
+            git pull --rebase --autostash origin main || true
+            git push
+          fi
+
       - name: Mark output
         id: check
         run: echo "changed=true" >> "$GITHUB_OUTPUT"

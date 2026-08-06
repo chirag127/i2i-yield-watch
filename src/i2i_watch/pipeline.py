@@ -104,15 +104,23 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     )
 
     results = {"telegram": False, "ntfy": False}
-    should_notify = (changed and qualifying) or (digest_due and qualifying)
+    should_notify = (changed and new_ids and qualifying) or (digest_due and qualifying)
     if should_notify:
-        why = "change" if changed else "digest"
+        # New-only on a change (never re-send an already-notified loan); full
+        # set only for a periodic digest.
+        if digest_due and not (changed and new_ids):
+            to_send = qualifying
+            why = "digest"
+        else:
+            to_send = [ln for ln in qualifying if str(ln["loanId"]) in new_ids]
+            why = "change"
         log.info(
-            "notifying %d qualifying loans (reason=%s, new=%d dropped=%d)",
-            len(qualifying),
+            "notifying %d loans (reason=%s, new=%d dropped=%d, qualifying=%d)",
+            len(to_send),
             why,
             len(new_ids),
             len(dropped_ids),
+            len(qualifying),
         )
         dashboard_url = os.environ.get(
             "DASHBOARD_URL", "https://chirag127.github.io/i2i-yield-watch/"
@@ -124,18 +132,23 @@ def run(raw_rows: list[dict] | None = None) -> dict:
             "droppedCount": len(dropped_ids),
             "rateThreshold": threshold,
         }
-        results = notify_all(qualifying, stats, dashboard_url, threshold)
+        results = notify_all(to_send, stats, dashboard_url, threshold)
         if was_any_channel_successful(results):
             storage.save_notify_state(sorted(qual_ids))
             storage.mark_notifications_sent(sorted(qual_ids))
-            log.info("sent: %d loans, notify-state updated", len(qualifying))
+            log.info("sent: %d loans, notify-state updated", len(to_send))
         else:
             log.warning("no channel succeeded — notify-state NOT updated, will retry next run")
     elif qualifying:
-        log.info(
-            "qualifying set unchanged (%d loans) and no digest due — staying silent",
-            len(qualifying),
-        )
+        if changed and not new_ids:
+            # only drops changed the set — record new state, do NOT notify
+            storage.save_notify_state(sorted(qual_ids))
+            log.info("qualifying set shrank (drops only) — state updated, no notify")
+        else:
+            log.info(
+                "qualifying set unchanged (%d loans) and no digest due — staying silent",
+                len(qualifying),
+            )
     else:
         log.info("no qualifying loans — nothing to notify")
         if changed:
