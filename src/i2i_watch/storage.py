@@ -82,6 +82,14 @@ def init():
     if _mode is not None:
         return
 
+    # Force git-as-DB JSON backend (no Firestore quota). Firestore free tier
+    # 429s under the 5x/15min self-loop; JSON is the intended backend per the
+    # repo rule. Set I2I_STORAGE=json (default here) to skip Firebase entirely.
+    if os.environ.get("I2I_STORAGE", "json").strip().lower() == "json":
+        log.info("storage backend: json (git-as-DB) — Firestore skipped (I2I_STORAGE=json)")
+        _mode = "json"
+        return
+
     sa = _sa_path()
     try:
         import firebase_admin

@@ -109,7 +109,7 @@ jobs:
           # 5-min cadence even when GitHub fires only every 15-30 min. Each
           # iteration diffs against the storage the previous iteration wrote,
           # so notifications chain correctly and stay near-real-time.
-        run: python -m i2i_watch --iterations 5 --interval 60 -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
+        run: python -m i2i_watch --iterations 2 --interval 90 -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
       - name: Commit updated data (state persistence — dedup across runs)
         run: |
