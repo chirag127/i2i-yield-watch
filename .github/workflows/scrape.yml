@@ -112,8 +112,8 @@ jobs:
             echo "no data change"
           else
             git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')"
-            git pull --rebase --autostash origin main || true
-            git push
+            git pull --rebase --autostash origin main || git rebase --abort
+            git push || echo "push skipped (concurrent run won the race)"
           fi
 
       - name: Mark output
