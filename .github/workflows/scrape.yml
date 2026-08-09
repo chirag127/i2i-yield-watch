@@ -134,6 +134,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          ref: main
+
+      - name: Build Pages artifact (_site = dashboard + data)
+        run: |
+          mkdir -p _site
+          cp dashboard/index.html dashboard/app.js dashboard/styles.css _site/
+          cp -r data _site/data
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
@@ -141,7 +148,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dashboard
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment
