@@ -59,7 +59,7 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[browser,firebase,dev]"
+          pip install -e ".[browser,dev]"
 
       - name: Run tests
         run: python -m pytest -q
@@ -77,19 +77,11 @@ jobs:
           echo "$GIT_CRYPT_KEY" | base64 -d > git-crypt-key
           git-crypt unlock git-crypt-key
 
-      - name: Write Firebase service account JSON
-        env:
-          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
-        run: |
-          if [ -n "${FIREBASE_SA_JSON:-}" ]; then
-            printf '%s' "$FIREBASE_SA_JSON" > i2i-yield-watch-sa.json
-            echo "Wrote $(wc -c < i2i-yield-watch-sa.json) bytes to i2i-yield-watch-sa.json"
-          else
-            echo "No FIREBASE_SA_JSON secret — using git-crypt-decrypted file"
-          fi
-
       - name: Run scraper (self-looping)
         env:
+          # git-as-DB JSON backend only — Firestore free tier 429'd under the
+          # self-loop and silently killed notifications. State lives in data/*.json.
+          I2I_STORAGE: json
           # Config loaded from git-crypt-decrypted .env; secrets below override.
           TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
