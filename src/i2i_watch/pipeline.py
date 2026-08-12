@@ -22,7 +22,7 @@ def _rate_threshold() -> float:
     return float(
         os.environ.get("NOTIFY_RATE_THRESHOLD")
         or os.environ.get("MEDIUM_PRIORITY_RATE_THRESHOLD")
-        or "40"
+        or "50"
     )
 
 
