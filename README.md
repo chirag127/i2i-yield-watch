@@ -66,10 +66,12 @@ Features: Active / Archived tabs, month pills, rate/priority/credit/product filt
 
 ### Auto-investor (`invest.py` / `cancel.py`) — REAL MONEY
 
-Places (and reverses) investments from inside the SAME Playwright browser session the scraper uses — direct HTTP to `api.i2ifunding.com` is 502-blocked, so login + `investorNow` + `cancel/funding` all go through `page.request` in the authenticated browser context.
+Places (and reverses) investments via **direct HTTP** to the i2i API with **auto-login** for fresh tokens each run. The loan *listing* still comes from the Playwright scraper (the one endpoint that reliably blocks direct HTTP); login + `walletAndFund` + `loandetailtoinvest` + `investorNow` + `cancel/funding` are plain `urllib` calls carrying browser-parity headers (Origin/Referer/UA). If a money POST 502s/403s even so, that one call retries inside a Playwright browser context (fallback).
 
-- **Login:** `page.request.post .../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Response returns fresh `session_id` + `csrf_token` — so token expiry is a non-issue (fresh login every run).
-- **Select + rank:** loans with rate **strictly > `MIN_INVEST_RATE_PCT`** (default 40), ranked rate desc then `bloan_cibil_score` desc.
+Modular split: `config.py` (all tunables), `auth.py` (AES login), `client.py` (all HTTP, one place), `invest.py` (pure select/rank/size/EMI + orchestrator), `cancel.py` (thin).
+
+- **Login:** POST `.../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Fresh `session_id` + `csrf_token` every run — token expiry is a non-issue.
+- **Select + rank:** loans with rate **strictly > `MIN_INVEST_RATE_PCT`** (default **150** — a safe no-op vs the ~46.7%-max market; lower it deliberately), ranked rate desc then `bloan_cibil_score` desc.
 - **Size:** `min(PER_LOAN_CAP, amtLeft, wallet, per-run remaining)`, floored to `invest_multiple_value` and whole rupees, skipped if `< INVEST_MIN_AMOUNT`. `PER_RUN_CAP` is a circuit breaker.
 - **Dry-run default** — prints the plan, places nothing. `--live` places for real (requires `I2I_TXN_PIN`). Any error mid-run STOPS.
 
@@ -80,7 +82,7 @@ python -m i2i_watch cancel <loanId>…          # DRY RUN of cancel
 python -m i2i_watch cancel <loanId> --live    # reverse funding(s)
 ```
 
-CI: `.github/workflows/invest.yml` runs `invest --live` twice/hour in the IST daytime window. Requires secrets `I2I_EMAIL`, `I2I_PASSWORD`, `I2I_TXN_PIN` (+ `TELEGRAM_*` for the summary).
+CI: `.github/workflows/invest.yml` runs `invest --live` hourly in the IST daytime window. Requires secrets `I2I_EMAIL`, `I2I_PASSWORD`, `I2I_TXN_PIN` (+ `TELEGRAM_*` for the summary).
 
 ---
 
@@ -90,7 +92,7 @@ CI: `.github/workflows/invest.yml` runs `invest --live` twice/hour in the IST da
 |----------|---------|-------------|
 | `I2I_STORAGE` | `json` | `json` (git-as-DB) or `firebase` (Firestore) |
 | `NOTIFY_RATE_THRESHOLD` | `40` | Minimum interest rate (%) to qualify for alerts |
-| `MIN_INVEST_RATE_PCT` | `40` | Auto-invest gate — invest only in loans with rate **>** this |
+| `MIN_INVEST_RATE_PCT` | `150` | Auto-invest gate — invest only in loans with rate **>** this (150 = safe no-op) |
 | `PER_LOAN_CAP` | `5000` | Max ₹ placed in one loan |
 | `PER_RUN_CAP` | `25000` | Max ₹ deployed per run (circuit breaker) |
 | `INVEST_MIN_AMOUNT` | `1000` | Min ₹ per investment (skip below) |
