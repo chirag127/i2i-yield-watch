@@ -24,7 +24,7 @@ def json_backend(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "_app", None)
     monkeypatch.setattr(storage, "_db", None)
     monkeypatch.setenv("STARTUP_JITTER_MS", "0")
-    monkeypatch.setenv("NOTIFY_RATE_THRESHOLD", "40")
+    monkeypatch.setenv("NOTIFY_MIN_RATE_PCT", "40")
     monkeypatch.delenv("I2I_DIGEST", raising=False)
     monkeypatch.delenv("I2I_DIGEST_HOURS", raising=False)
     return tmp_path

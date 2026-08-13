@@ -93,9 +93,9 @@ jobs:
           NTFY_USER: ${{ secrets.NTFY_USER }}
           NTFY_PASSWORD: ${{ secrets.NTFY_PASSWORD }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
-          HIGH_PRIORITY_RATE_THRESHOLD: '70'
-          MEDIUM_PRIORITY_RATE_THRESHOLD: '50'
-          NOTIFY_RATE_THRESHOLD: '50'
+          PRIORITY_HIGH_RATE_PCT: '70'
+          PRIORITY_MEDIUM_RATE_PCT: '50'
+          NOTIFY_MIN_RATE_PCT: '40'
           STARTUP_JITTER_MS: '2000'
           # Self-loop: one run polls several times ~60s apart to approximate
           # 5-min cadence even when GitHub fires only every 15-30 min. Each

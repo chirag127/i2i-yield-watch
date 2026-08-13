@@ -5,7 +5,7 @@ plain dicts so the money-safety logic unit-tests without a network.
 
 Loan LISTING is scraped by the EXISTING browser scraper (sources/i2i.py — the one
 endpoint that reliably blocks direct HTTP). Selection keeps rate STRICTLY ABOVE
-config.MIN_INVEST_RATE_PCT (150 => 0 candidates vs a ~46.7%-max market: safe
+config.AUTOINVEST_MIN_RATE_PCT (150 => 0 candidates vs a ~46.7%-max market: safe
 no-op). Default is a DRY RUN that prints the plan and places nothing.
 
     python -m i2i_watch invest           # DRY RUN — prints plan, places nothing
@@ -51,7 +51,7 @@ def _first(d: dict, keys: tuple[str, ...]) -> object | None:
     return None
 
 
-def select(loans: list[dict], min_rate: float = C.MIN_INVEST_RATE_PCT) -> list[dict]:
+def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT) -> list[dict]:
     """Raw rows -> candidates with rate STRICTLY > min_rate, ranked rate desc then
     credit score desc. Field names per config (HAR-verified)."""
     out = []
@@ -208,7 +208,7 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
 
 def run(live: bool = False) -> int:
     """One auto-invest cycle. Dry-run unless live=True. Returns a process rc."""
-    gate = C.MIN_INVEST_RATE_PCT
+    gate = C.AUTOINVEST_MIN_RATE_PCT
 
     from .sources.i2i import fetch_all_loans
     try:

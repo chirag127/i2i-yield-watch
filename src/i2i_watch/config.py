@@ -2,9 +2,15 @@
 module imports from here; nothing hardcoded elsewhere (no magic numbers, no
 scattered endpoints/field names).
 
-Two DISTINCT rate gates:
-  - MIN_INTEREST_PCT      NOTIFY/monitor threshold (alert on loans >= this).
-  - MIN_INVEST_RATE_PCT   AUTO-INVEST gate (place money only on rate STRICTLY >).
+TWO DISTINCT rate gates — DO NOT CONFLATE (env var == config name, one each):
+
+  name                    | default | meaning                       | operator
+  ------------------------|---------|-------------------------------|---------
+  NOTIFY_MIN_RATE_PCT     | 40      | ALERT (monitor pings you)     | rate >  this
+  AUTOINVEST_MIN_RATE_PCT | 150     | PLACE REAL MONEY              | rate >  this
+
+NOTIFY = free/read-only (Telegram/ntfy). AUTOINVEST = spends money; 150 is a
+safe no-op vs the ~46.7%-max market (0 candidates until lowered deliberately).
 
 HARD SAFETY RAILS (caps) are circuit breakers — real money moves through them.
 Each numeric is env-overridable so CI can tune without a code change.
@@ -22,9 +28,9 @@ def _f(env: str, default: float) -> float:
         return default
 
 
-# ── rate gates (two distinct thresholds — do NOT conflate) ──────────────────
-MIN_INTEREST_PCT: float = _f("MIN_INTEREST_PCT", 40.0)          # NOTIFY gate (>=)
-MIN_INVEST_RATE_PCT: float = _f("MIN_INVEST_RATE_PCT", 150.0)   # INVEST gate (strictly >)
+# ── rate gates (two distinct thresholds — do NOT conflate; see table above) ──
+NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # ALERT gate (rate >)
+AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 150.0) # MONEY gate (rate >)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────
 PER_LOAN_CAP: float = _f("PER_LOAN_CAP", 5000.0)             # never exceed per loan

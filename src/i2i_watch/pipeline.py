@@ -10,6 +10,7 @@ import random
 import time
 from datetime import datetime, timedelta, timezone
 
+from . import config as C
 from . import storage
 from .notify.channels import notify_all, was_any_channel_successful
 from .sources.i2i import fetch_all_loans
@@ -19,11 +20,9 @@ log = logging.getLogger("i2i_watch")
 
 
 def _rate_threshold() -> float:
-    return float(
-        os.environ.get("NOTIFY_RATE_THRESHOLD")
-        or os.environ.get("MEDIUM_PRIORITY_RATE_THRESHOLD")
-        or "50"
-    )
+    """NOTIFY gate: alert on loans with rate > this. config.NOTIFY_MIN_RATE_PCT
+    (default 40), env-overridable via the SAME name NOTIFY_MIN_RATE_PCT."""
+    return C._f("NOTIFY_MIN_RATE_PCT", C.NOTIFY_MIN_RATE_PCT)
 
 
 def _digest_hours() -> float:

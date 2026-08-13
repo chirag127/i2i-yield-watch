@@ -55,11 +55,12 @@ def calculate_yield_score(loan: dict) -> float:
 
 
 def get_priority(interest_rate: float | None) -> str:
-    """VERY_HIGH / MEDIUM / LOW from rate thresholds (env-tunable)."""
+    """VERY_HIGH / MEDIUM / LOW priority LABEL from rate (env-tunable). This is a
+    display bucket only — NOT the notify gate (NOTIFY_MIN_RATE_PCT)."""
     if interest_rate is None:
         return "LOW"
-    high = float(os.environ.get("HIGH_PRIORITY_RATE_THRESHOLD", "70"))
-    med = float(os.environ.get("MEDIUM_PRIORITY_RATE_THRESHOLD", "50"))
+    high = float(os.environ.get("PRIORITY_HIGH_RATE_PCT", "70"))
+    med = float(os.environ.get("PRIORITY_MEDIUM_RATE_PCT", "50"))
     if interest_rate >= high:
         return "VERY_HIGH"
     if interest_rate >= med:

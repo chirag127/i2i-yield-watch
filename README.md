@@ -44,7 +44,7 @@ Set `I2I_STORAGE=firebase` to re-enable Firestore (requires `FIREBASE_SA_JSON` s
 
 Single Telegram bot `oriz127_bot`. Notify logic:
 
-- **NEW loans only** — a loan is announced once, the first time it appears AND its rate exceeds `NOTIFY_RATE_THRESHOLD` (default 40%). Loan IDs are persisted in `data/notify-state.json`; the set never re-notifies an already-seen ID.
+- **NEW loans only** — a loan is announced once, the first time it appears AND its rate exceeds `NOTIFY_MIN_RATE_PCT` (default 40%). Loan IDs are persisted in `data/notify-state.json`; the set never re-notifies an already-seen ID.
 - **Qualifying-set change** — if the set of loans above the threshold changes (any loan added or dropped), a summary fires.
 - **Periodic digest** — if `I2I_DIGEST_HOURS` is set, a full digest fires that often regardless of change.
 - `--reset-notify-state` flag (or the `reset_notify_state` workflow_dispatch input) clears the dedup state so all currently-qualifying loans re-announce once.
@@ -71,7 +71,7 @@ Places (and reverses) investments via **direct HTTP** to the i2i API with **auto
 Modular split: `config.py` (all tunables), `auth.py` (AES login), `client.py` (all HTTP, one place), `invest.py` (pure select/rank/size/EMI + orchestrator), `cancel.py` (thin).
 
 - **Login:** POST `.../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Fresh `session_id` + `csrf_token` every run — token expiry is a non-issue.
-- **Select + rank:** loans with rate **strictly > `MIN_INVEST_RATE_PCT`** (default **150** — a safe no-op vs the ~46.7%-max market; lower it deliberately), ranked rate desc then `bloan_cibil_score` desc.
+- **Select + rank:** loans with rate **strictly > `AUTOINVEST_MIN_RATE_PCT`** (default **150** — a safe no-op vs the ~46.7%-max market; lower it deliberately), ranked rate desc then `bloan_cibil_score` desc.
 - **Size:** `min(PER_LOAN_CAP, amtLeft, wallet, per-run remaining)`, floored to `invest_multiple_value` and whole rupees, skipped if `< INVEST_MIN_AMOUNT`. `PER_RUN_CAP` is a circuit breaker.
 - **Dry-run default** — prints the plan, places nothing. `--live` places for real (requires `I2I_TXN_PIN`). Any error mid-run STOPS.
 
@@ -91,15 +91,15 @@ CI: `.github/workflows/invest.yml` runs `invest --live` hourly in the IST daytim
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `I2I_STORAGE` | `json` | `json` (git-as-DB) or `firebase` (Firestore) |
-| `NOTIFY_RATE_THRESHOLD` | `40` | Minimum interest rate (%) to qualify for alerts |
-| `MIN_INVEST_RATE_PCT` | `150` | Auto-invest gate — invest only in loans with rate **>** this (150 = safe no-op) |
+| `NOTIFY_MIN_RATE_PCT` | `40` | **Notify gate** — alert on loans with rate **>** this |
+| `AUTOINVEST_MIN_RATE_PCT` | `150` | **Auto-invest gate** — place real money only on rate **>** this (150 = safe no-op) |
 | `PER_LOAN_CAP` | `5000` | Max ₹ placed in one loan |
 | `PER_RUN_CAP` | `25000` | Max ₹ deployed per run (circuit breaker) |
 | `INVEST_MIN_AMOUNT` | `1000` | Min ₹ per investment (skip below) |
 | `I2I_EMAIL` / `I2I_PASSWORD` | — | Login creds (password AES-encrypted client-side) |
 | `I2I_TXN_PIN` | — | Transaction PIN required to place/cancel (`--live`) |
-| `HIGH_PRIORITY_RATE_THRESHOLD` | `70` | Rate threshold for VERY_HIGH priority label |
-| `MEDIUM_PRIORITY_RATE_THRESHOLD` | `50` | Rate threshold for MEDIUM priority label |
+| `PRIORITY_HIGH_RATE_PCT` | `70` | Rate threshold for VERY_HIGH priority LABEL (display only) |
+| `PRIORITY_MEDIUM_RATE_PCT` | `50` | Rate threshold for MEDIUM priority LABEL (display only) |
 | `I2I_DIGEST_HOURS` | unset | Send full digest every N hours regardless of change |
 | `TELEGRAM_ENABLED` | `false` | Enable Telegram notifications |
 | `TELEGRAM_BOT_TOKEN` | — | Bot token for `oriz127_bot` |
