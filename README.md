@@ -1,12 +1,45 @@
 # i2i-yield-watch
 
-**Live dashboard:** https://chirag127.github.io/i2i-yield-watch/
-**Repo:** https://github.com/chirag127/i2i-yield-watch
+> Automated i2iFunding high-yield P2P loan intelligence — scrape, score, notify, and (optionally) auto-invest.
 
-[![Auto Scraper](https://github.com/chirag127/i2i-yield-watch/actions/workflows/scrape.yml/badge.svg)](https://github.com/chirag127/i2i-yield-watch/actions/workflows/scrape.yml)
 [![MIT License](https://img.shields.io/github/license/chirag127/i2i-yield-watch)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/chirag127/i2i-yield-watch?style=flat)](https://github.com/chirag127/i2i-yield-watch/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/chirag127/i2i-yield-watch)](https://github.com/chirag127/i2i-yield-watch/commits)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![Auto Scraper](https://github.com/chirag127/i2i-yield-watch/actions/workflows/scrape.yml/badge.svg)](https://github.com/chirag127/i2i-yield-watch/actions/workflows/scrape.yml)
 
-Automated i2iFunding high-yield P2P loan watcher. Scrapes the public borrower listing every 15 min, scores loans by yield, alerts Telegram on newly-qualifying loans (rate > 40% by default). State lives in committed JSON files — no external database.
+**What it is.** A hands-off watcher for the [i2iFunding](https://www.i2ifunding.com/) P2P lending marketplace. Every 15 minutes it scrapes the public borrower listing, scores each loan by yield/credit/priority, and alerts Telegram on newly-qualifying loans. State lives entirely in committed JSON files (git-as-DB) — no external database. An optional **real-money auto-investor** can place and reverse investments, gated safe-off by default.
+
+- **Live dashboard:** https://chirag127.github.io/i2i-yield-watch/
+- **GHP landing:** https://chirag127.github.io/i2i-yield-watch/
+- **Repo:** https://github.com/chirag127/i2i-yield-watch
+
+⭐ **If this is useful, please star the repo — it helps others find it.**
+
+> **⚠️ Real-money capable.** The auto-investor places actual money on i2iFunding. It ships **safe-gated off**: dry-run by default (`invest` prints the plan and places nothing), and `AUTOINVEST_MIN_RATE_PCT=150` yields **zero candidates** against a ~46.7%-max market. Real placement needs `--live` **and** `I2I_TXN_PIN`; any mid-run error stops all further spending. Lower the gate deliberately, at your own risk.
+
+> **🔒 No PII here.** This public repo holds tooling and anonymised aggregate stats only (avg rate, counts). Borrower names, PAN, CIBIL, escrow, and account records live in a **separate private** repo — never committed here.
+
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+  subgraph CI["GitHub Actions (cron every 15 min)"]
+    S["Playwright XHR scraper<br/>sources/i2i.py"] --> T["transform.py<br/>normalise rows"]
+    T --> SC["scorer.py<br/>yield score + priority"]
+    SC --> ST["storage.py<br/>git-as-DB: data/*.json"]
+    ST --> N{"new / changed<br/>qualifying loans?"}
+    N -- yes --> TG["Telegram / ntfy<br/>notify/channels.py"]
+    ST -- commit data back --> REPO[("main branch<br/>data/*.json")]
+  end
+  REPO --> GHP["GitHub Pages dashboard<br/>fetch('./data/*.json')"]
+  subgraph INVEST["invest.yml — REAL MONEY (IST daytime)"]
+    SC --> IV["invest.py<br/>select > gate · size · EMI"]
+    IV -- "--live + PIN" --> API["i2i API<br/>login → investorNow"]
+  end
+```
+
+*General information, not investment advice.*
 
 ---
 
@@ -163,6 +196,26 @@ data/                git-as-DB state (committed by CI)
 
 ---
 
+## Part of the oriz family
+
+One of ~80 sites and tools under the **oriz** umbrella — see the hub at [blog.oriz.in](https://blog.oriz.in). Hosting is **$0**: the scraper and auto-investor run on GitHub Actions' free minutes, state is git-as-DB, and the dashboard is served free from GitHub Pages.
+
+## Security
+
+No secrets in the repo. `.env` and the Firebase service-account JSON are **git-crypt encrypted** at rest (CI unlocks via the `GIT_CRYPT_KEY` secret); credentials (`I2I_*`, `TELEGRAM_*`, `NTFY_*`) are GitHub Actions secrets, never committed. No borrower PII lives here — see the note at the top.
+
+## Contributing
+
+Issues and PRs welcome. Conventional commits are the changelog. Keep the public/private PII boundary intact — never add borrower data to this repo.
+
+## Status
+
+Stable and running in production (15-min scrape cron + optional hourly invest window).
+
+## Disclaimer
+
+General information and personal automation only — **not investment advice**. P2P lending carries real risk of capital loss; the auto-investor can place real money. Use at your own risk.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Author: **Chirag Singhal** · chirag@oriz.in
