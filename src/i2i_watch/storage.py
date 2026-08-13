@@ -409,6 +409,21 @@ def update_stats(active: list[dict], newly_archived: int = 0) -> None:
     log.info("stats updated")
 
 
+def load_invested() -> list[int]:
+    """loanIds placed by the auto-investor (JSON git-as-DB only)."""
+    try:
+        return [int(x) for x in _load_json("invested-loans.json", [])]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def record_invested(loan_ids: list[int]) -> None:
+    """Append placed loanIds to data/invested-loans.json (for cancel --all-invested)."""
+    merged = sorted(set(load_invested()) | {int(x) for x in loan_ids})
+    _write_json("invested-loans.json", merged)
+    log.info("recorded %d invested loan(s)", len(loan_ids))
+
+
 def append_changelog(run_summary: dict) -> None:
     init()
     rid = run_summary.get("runId") or f"run_{int(datetime.now().timestamp() * 1000)}"

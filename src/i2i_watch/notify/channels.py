@@ -192,3 +192,47 @@ def notify_all(
 
 def was_any_channel_successful(results: dict) -> bool:
     return any(results.values())
+
+
+def send_telegram_text(text: str) -> bool:
+    """Send one pre-formatted HTML message via the fleet Telegram bot. Used by
+    the invest/cancel summaries (they build their own body). No-op if unset."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        log.info("telegram: TELEGRAM_BOT_TOKEN/CHAT_ID unset — skipping")
+        return False
+    try:
+        r = httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
+            timeout=20,
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("telegram: send_telegram_text failed: %s", e)
+        return False
+
+
+def send_telegram_text(text: str) -> bool:
+    """Send one pre-formatted HTML Telegram message (used by the auto-investor
+    summary). No-ops without TELEGRAM_BOT_TOKEN/CHAT_ID; not gated by
+    TELEGRAM_ENABLED (a real-money placement always warrants a ping)."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        log.info("telegram text: token/chat unset — skipping")
+        return False
+    try:
+        r = httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
+            timeout=20)
+        r.raise_for_status()
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("telegram text send failed: %s", e)
+        return False

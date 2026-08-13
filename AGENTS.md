@@ -54,3 +54,8 @@ Python scraper repo (git-as-DB, GitHub Actions cron).
 - **cron reliability**: `concurrency` queue (cancel-in-progress: false), rebase-before-push guard, and an `if: failure()` step that pings Telegram. GitHub schedule cron is best-effort (late is fine; the queue + next run handle it).
 - **Tests**: pytest. On this Windows box the working interpreter is the `py` launcher: `py -m pytest -q`.
 - Playwright on Windows needs `args=["--no-sandbox","--disable-gpu","--disable-dev-shm-usage"]`.
+
+### Related repos + the PII boundary (read before moving any data)
+- **`chirag127/i2i-portfolio-data` (PRIVATE)** — the sibling repo holding the personal i2iFunding **account data**: 151 borrowers' names + per-loan amounts, investor ID, escrow a/c no, PAN, CIBIL report, agreements, EMI/return analysis. Its README states this **must stay private**.
+- **THIS repo (`i2i-yield-watch`) is PUBLIC** (live GitHub Pages dashboard). Therefore: **NEVER commit or move borrower PII / PAN / CIBIL / escrow / account data into this repo.** Direct such data to the private `i2i-portfolio-data` only. This repo holds tooling + anonymised aggregate stats (avg rate, counts) — no personal data.
+- Split of concerns: `i2i-yield-watch` = automation (scrape, score, notify, invest/cancel) + public dashboard; `i2i-portfolio-data` = the operator's own private account records + analysis. Keep them separate; do not merge PII across the public/private boundary.

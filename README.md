@@ -64,6 +64,24 @@ Features: Active / Archived tabs, month pills, rate/priority/credit/product filt
 - **Deploy:** after scrape succeeds, build `_site/` (dashboard HTML/JS/CSS + `data/`), upload as Pages artifact, deploy.
 - **Failure alert:** `if: failure()` step pings Telegram.
 
+### Auto-investor (`invest.py` / `cancel.py`) — REAL MONEY
+
+Places (and reverses) investments from inside the SAME Playwright browser session the scraper uses — direct HTTP to `api.i2ifunding.com` is 502-blocked, so login + `investorNow` + `cancel/funding` all go through `page.request` in the authenticated browser context.
+
+- **Login:** `page.request.post .../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Response returns fresh `session_id` + `csrf_token` — so token expiry is a non-issue (fresh login every run).
+- **Select + rank:** loans with rate **strictly > `MIN_INVEST_RATE_PCT`** (default 40), ranked rate desc then `bloan_cibil_score` desc.
+- **Size:** `min(PER_LOAN_CAP, amtLeft, wallet, per-run remaining)`, floored to `invest_multiple_value` and whole rupees, skipped if `< INVEST_MIN_AMOUNT`. `PER_RUN_CAP` is a circuit breaker.
+- **Dry-run default** — prints the plan, places nothing. `--live` places for real (requires `I2I_TXN_PIN`). Any error mid-run STOPS.
+
+```bash
+python -m i2i_watch invest            # DRY RUN — plan only
+python -m i2i_watch invest --live     # REAL money
+python -m i2i_watch cancel <loanId>…          # DRY RUN of cancel
+python -m i2i_watch cancel <loanId> --live    # reverse funding(s)
+```
+
+CI: `.github/workflows/invest.yml` runs `invest --live` twice/hour in the IST daytime window. Requires secrets `I2I_EMAIL`, `I2I_PASSWORD`, `I2I_TXN_PIN` (+ `TELEGRAM_*` for the summary).
+
 ---
 
 ## Environment variables
@@ -72,6 +90,12 @@ Features: Active / Archived tabs, month pills, rate/priority/credit/product filt
 |----------|---------|-------------|
 | `I2I_STORAGE` | `json` | `json` (git-as-DB) or `firebase` (Firestore) |
 | `NOTIFY_RATE_THRESHOLD` | `40` | Minimum interest rate (%) to qualify for alerts |
+| `MIN_INVEST_RATE_PCT` | `40` | Auto-invest gate — invest only in loans with rate **>** this |
+| `PER_LOAN_CAP` | `5000` | Max ₹ placed in one loan |
+| `PER_RUN_CAP` | `25000` | Max ₹ deployed per run (circuit breaker) |
+| `INVEST_MIN_AMOUNT` | `1000` | Min ₹ per investment (skip below) |
+| `I2I_EMAIL` / `I2I_PASSWORD` | — | Login creds (password AES-encrypted client-side) |
+| `I2I_TXN_PIN` | — | Transaction PIN required to place/cancel (`--live`) |
 | `HIGH_PRIORITY_RATE_THRESHOLD` | `70` | Rate threshold for VERY_HIGH priority label |
 | `MEDIUM_PRIORITY_RATE_THRESHOLD` | `50` | Rate threshold for MEDIUM priority label |
 | `I2I_DIGEST_HOURS` | unset | Send full digest every N hours regardless of change |

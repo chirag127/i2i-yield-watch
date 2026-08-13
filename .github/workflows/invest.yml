@@ -1,0 +1,79 @@
+name: i2i Auto-Invest (REAL MONEY)
+
+# Places REAL investments via `python -m i2i_watch invest --live`.
+# AUTH = auto-login: with I2I_EMAIL + I2I_PASSWORD set, each run logs in fresh
+# (client-side AES-encrypted password, passphrase kXyb3gzU) and gets new session
+# tokens — no stale-token problem. Money endpoints (wallet/loandetail/investorNow/
+# cancel) go via DIRECT HTTP with browser-parity headers; Playwright is installed
+# for the loan-listing scraper and as the 502 fallback for the money POSTs.
+#
+# REQUIRED SECRETS — the USER sets these on chirag127/i2i-yield-watch:
+#   gh secret set I2I_EMAIL    --repo chirag127/i2i-yield-watch --body "<email>"
+#   gh secret set I2I_PASSWORD --repo chirag127/i2i-yield-watch --body "<password>"
+#   gh secret set I2I_TXN_PIN  --repo chirag127/i2i-yield-watch --body "<4-digit pin>"
+# TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID already exist on this repo (scraper uses them).
+#
+# The committed gate MIN_INVEST_RATE_PCT=150 (config.py) is a SAFE NO-OP on the
+# current market (max ~46.7%) — it places nothing until the gate is lowered
+# deliberately (set the repo variable MIN_INVEST_RATE_PCT to override).
+
+on:
+  schedule:
+    - cron: "17 4-13 * * *"   # hourly, daytime IST window (UTC 04:xx-13:xx)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write             # commit data/invested-loans.json back (git-as-DB)
+
+concurrency:
+  group: auto-invest
+  cancel-in-progress: false   # never race two real-money runs
+
+jobs:
+  invest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[browser]"
+      - name: Install Playwright Chromium (listing scraper + 502 fallback)
+        run: python -m playwright install chromium --with-deps
+      - name: Auto-invest (LIVE)
+        env:
+          PYTHONIOENCODING: utf-8
+          I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
+          I2I_PASSWORD: ${{ secrets.I2I_PASSWORD }}
+          I2I_TXN_PIN: ${{ secrets.I2I_TXN_PIN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # gate stays 150 (config default, safe no-op); set repo var to override
+          MIN_INVEST_RATE_PCT: ${{ vars.MIN_INVEST_RATE_PCT }}
+        run: python -m i2i_watch invest --live -v
+      - name: Commit invested-loans state (git-as-DB)
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/invested-loans.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "no invest state change"
+          else
+            git commit -m "data: i2i invested-loans $(date -u +'%F %H:%MZ')"
+            git pull --rebase --autostash origin main || git rebase --abort
+            git push || echo "push skipped (concurrent run won the race)"
+          fi
