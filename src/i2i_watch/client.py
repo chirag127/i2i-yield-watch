@@ -73,7 +73,9 @@ class I2iClient:
             return json.loads(r.read())
 
     def _post(self, host: str, path: str, body: dict, timeout: int = 60) -> dict:
-        """Direct POST; on 502/403 fall back to a browser-context POST."""
+        """Direct POST; on 502/403 OR timeout/connection error fall back to a
+        browser-context POST (the listing endpoint hangs on a fragile direct
+        socket in some networks — widen the trigger so the browser catches it)."""
         if self._force_browser:
             return self._browser_post(host, path, body, timeout)
         req = urllib.request.Request(
@@ -88,6 +90,9 @@ class I2iClient:
                 log.warning("direct POST %s -> %d; browser-context fallback", path, e.code)
                 return self._browser_post(host, path, body, timeout)
             raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            log.warning("direct POST %s -> %s; browser-context fallback", path, type(e).__name__)
+            return self._browser_post(host, path, body, timeout)
 
     def _browser_post(self, host: str, path: str, body: dict, timeout: int) -> dict:
         """Fallback: POST inside Playwright so the call carries the i2i origin +
@@ -141,6 +146,51 @@ class I2iClient:
         """UI-parity GET the browser fires before investing (harmless)."""
         return self._get(
             C.OPEN_LOANS_HOST, f"investor/principalProtection/{risk_cat}/{rate}")
+
+    def list_loans(self) -> list[dict]:
+        """Marketplace loan feed over PURE DIRECT HTTP — paginated.
+
+        ROOT CAUSE of the historical "direct listing times out": the endpoint
+        HANGS unless the POST body is the COMPLETE filter object (config
+        .LISTING_FILTER_BODY); an empty/partial body blocks for 15s+. With the
+        real body it returns 200 in ~3s/page. Auth is pure query-param, same as
+        every other endpoint — no cookie/Authorization needed.
+
+        Pages `pageNo` 1..N (10 rows/page) until a short/empty page. Raises on any
+        HTTP/URL/timeout error so the caller (sources.i2i) can fall back to the
+        Playwright scraper — Playwright stays the belt-and-suspenders fallback."""
+        import copy
+
+        rows: list[dict] = []
+        seen: set[str] = set()
+        url = self._url(C.OPEN_LOANS_HOST, C.LISTING_ENDPOINT)
+        body = copy.deepcopy(C.LISTING_FILTER_BODY)
+        for pg in range(1, C.LISTING_MAX_PAGES + 1):
+            body["pageNo"] = pg
+            data = json.dumps(body).encode("utf-8")
+            page = None
+            for attempt in range(3):  # per-page retry: the endpoint is socket-flaky
+                req = urllib.request.Request(
+                    url, data=data, method="POST", headers=browser_headers())
+                try:
+                    with urllib.request.urlopen(req, timeout=40) as r:
+                        page = json.loads(r.read())
+                    break
+                except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                    if attempt == 2:
+                        raise
+                    log.warning("listing page %d %s; retry %d", pg, type(e).__name__, attempt + 1)
+            if not isinstance(page, list) or not page:
+                break
+            for item in page:
+                rid = str(item.get("pl_bloan_id") or item.get("pl_id") or "")
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    rows.append(item)
+            if len(page) < C.LISTING_PAGE_SIZE:
+                break
+        log.info("direct-HTTP listing: %d loans over %d page(s)", len(rows), pg)
+        return rows
 
     # ── writes (REAL MONEY) ────────────────────────────────────────────────────
     def invest(self, payload: dict) -> dict:

@@ -120,11 +120,31 @@ def _scrape_once() -> list[dict]:
 
 
 def fetch_all_loans() -> list[dict]:
-    """Return raw loan rows. Retries the whole browser session up to 3x."""
+    """Return raw loan rows.
+
+    PRIMARY: pure direct-HTTP paginated feed (client.list_loans) — no browser.
+    FALLBACK (belt-and-suspenders): the Playwright XHR-interception scraper below,
+    retried up to 3x. The direct path needs i2i creds (auto-login); with none, or
+    on ANY direct failure (timeout/connection/HTTP), we drop straight to the
+    browser scraper — which needs no auth for the public listing."""
+    try:
+        from ..client import I2iClient
+
+        client = I2iClient.from_env()
+        rows = client.list_loans()
+        if rows:
+            log.info("listing via direct HTTP: %d loans (no browser)", len(rows))
+            return rows
+        log.warning("direct-HTTP listing returned 0 rows; browser fallback")
+    except SystemExit as e:  # no creds -> public browser scrape
+        log.info("no i2i creds for direct listing (%s); browser fallback", e)
+    except Exception as e:  # noqa: BLE001 — timeout/conn/HTTP -> browser fallback
+        log.warning("direct-HTTP listing failed (%s); browser fallback", str(e)[:120])
+
     last_err: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            log.info("scrape attempt %d/%d", attempt, MAX_RETRIES)
+            log.info("browser scrape attempt %d/%d", attempt, MAX_RETRIES)
             rows = _scrape_once()
             if rows:
                 return rows
@@ -135,7 +155,7 @@ def fetch_all_loans() -> list[dict]:
             log.error("attempt %d failed: %s", attempt, str(e)[:120])
         if attempt < MAX_RETRIES:
             time.sleep(RETRY_DELAY_S * attempt)
-    raise RuntimeError(f"all {MAX_RETRIES} scrape attempts failed: {last_err}")
+    raise RuntimeError(f"all {MAX_RETRIES} browser scrape attempts failed: {last_err}")
 
 
 def load_raw_fixture(path: str) -> list[dict]:

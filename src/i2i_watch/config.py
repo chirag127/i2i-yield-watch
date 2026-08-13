@@ -18,6 +18,7 @@ Each numeric is env-overridable so CI can tune without a code change.
 
 from __future__ import annotations
 
+import json
 import os
 
 
@@ -44,6 +45,19 @@ INVEST_MULTIPLE: float = _f("INVEST_MULTIPLE", 1.0)          # amount granularit
 OPEN_LOANS_HOST = "https://api.i2ifunding.com/api/v1"   # login, feed, wallet, investorNow
 API_BASE = "https://apiv1.i2ifunding.com"               # cancel/funding
 LOGIN_ENDPOINT = "login/"
+LISTING_ENDPOINT = "getActiveFilteredBorrowers/"        # marketplace loan feed (paged)
+LISTING_PAGE_SIZE = 10                                  # rows/page (server-fixed)
+LISTING_MAX_PAGES = 60                                  # pagination safety cap
+
+# Exact filter body the SPA POSTs to getActiveFilteredBorrowers (HAR-verified).
+# ROOT CAUSE of the old direct-HTTP "timeout": the endpoint HANGS unless the body
+# is this COMPLETE filter object with all options present (empty {} / partial /
+# empty-options bodies all block for 15s+). All active=false => "no filter". We
+# only mutate pageNo per request. Auth is pure query-param (csrf/session_id) — no
+# cookie or Authorization header is involved.
+LISTING_FILTER_BODY: dict = json.loads(
+    '{"riskCategory":{"label":"Risk Category","options":[{"text":"A","active":false,"value":"A"},{"text":"B","active":false,"value":"B"},{"text":"C","active":false,"value":"C"},{"text":"D","active":false,"value":"D"},{"text":"E","active":false,"value":"E"},{"text":"F","active":false,"value":"F"},{"text":"X","active":false,"value":"X"}]},"employement":{"label":"Employement","options":[{"text":"Salaried Employee","active":false,"value":"salaried"},{"text":"Self Emp Business","active":false,"value":"business"},{"text":"Self Emp Professional","active":false,"value":"selfEmployed"}]},"product":{"label":"Product","options":[{"text":"Regular Loans","active":false,"value":"Regular Loans","id":1},{"text":"Employer Partnership","active":false,"value":"Employer Partnership","id":2},{"text":"Loan Against Invoice","active":false,"value":"Loan Against Invoice","id":3},{"text":"Course Subscription Fee","active":false,"value":"Course Subscription Fee","id":4},{"text":"NBFC Backed","active":false,"value":"NBFC Backed","id":5},{"text":"Urban Clap","active":false,"value":"Urban Clap","id":6},{"text":"Backed by Partner Company","active":false,"value":"Backed by Partner Company","id":8}]},"cibilScore":{"label":"Credit Bureau Score","options":[{"text":">700","active":false,"min":701,"max":-1},{"text":"650-700","active":false,"min":651,"max":700},{"text":"600-650","active":false,"min":601,"max":650},{"text":"No History","active":false,"min":0,"max":0}]},"preferredInterestRate":{"label":"Interest Rate","options":[{"text":"<18%","active":false,"min":0,"max":17},{"text":"18%-24%","active":false,"min":18,"max":23},{"text":"24%-30%","active":false,"min":24,"max":30}]},"tenure":{"label":"Tenure","options":[{"text":"<3 Months","active":false,"min":0,"max":2},{"text":"3 Months - 6 Months","active":false,"min":3,"max":5},{"text":"6 Months - 12 Months","active":false,"min":6,"max":11},{"text":"12 Months - 18 Months","active":false,"min":12,"max":17},{"text":"18 Months - 24 Months","active":false,"min":18,"max":23},{"text":">24 Months","active":false,"min":24,"max":-1}]},"income":{"label":"Income","options":[{"text":"<25,000","active":false,"min":0,"max":24999},{"text":"25,000 - 50,000","active":false,"min":25000,"max":49999},{"text":"50,000-75,000","active":false,"min":50000,"max":74999},{"text":"75,000+","active":false,"min":75000,"max":-1}]},"funded":{"label":"% Funded","options":[{"text":"<25%","active":false,"min":0,"max":24},{"text":"25%-50%","active":false,"min":25,"max":49},{"text":"50%-75%","active":false,"min":50,"max":74},{"text":"75%-100%","active":false,"min":75,"max":100},{"text":"All Live Loan","active":false,"min":0,"max":100}]},"daysLeft":{"label":"Days Left","options":[{"text":"0-7 Days","active":false,"min":0,"max":6},{"text":"7-15 Days","active":false,"min":7,"max":14},{"text":"> 15 Days","active":false,"min":15,"max":-1}]},"location":"","pageNo":1}'
+)
 
 # ── raw-row field names (HAR-verified) ──────────────────────────────────────
 RATE_FIELDS = ("pl_applicable_rate", "pl_current_rate", "pl_inital_rate")

@@ -19,7 +19,7 @@ name: i2i Auto-Invest (REAL MONEY)
 
 on:
   schedule:
-    - cron: "17 4-13 * * *"   # hourly, daytime IST window (UTC 04:xx-13:xx)
+    - cron: "3,18,33,48 4-13 * * *"   # every 15 min, daytime IST window (UTC 04:xx-13:xx)
   workflow_dispatch: {}
 
 permissions:
