@@ -64,6 +64,13 @@ RATE_FIELDS = ("pl_applicable_rate", "pl_current_rate", "pl_inital_rate")
 LOAN_ID_FIELDS = ("pl_bloan_id", "pl_id")
 AMOUNT_FIELDS = ("pl_amt_left", "pl_final_amt", "pl_amt")
 
+# ── ranking policy (shared by notify sort + auto-invest select) ──────────────
+# Order of importance: RETURN (rate) first, then borrower CREDIT SCORE, then
+# loan TENURE (longer = better for locking in a high rate). A borrower with NO
+# credit score is IMPUTED as this value for ranking (neither favored nor buried)
+# but is FLAGGED as "no credit score" in the notification.
+NO_CREDIT_IMPUTED_SCORE = 750.0
+
 # ── browser-parity headers (keep the API from 502-ing direct requests) ──────
 ORIGIN = "https://www.i2ifunding.com"
 REFERER = "https://www.i2ifunding.com/"

@@ -108,3 +108,22 @@ def bare(x: str | None) -> str | None:
     if not x:
         return None
     return re.sub(r"^₹\s*", "", str(x)).strip()
+
+
+def tenure_months(v: object) -> float | None:
+    """Loan tenure -> months as float. Accepts an int/float count of months,
+    or strings like '6 Months', '6', '1 Year', '1.5 yrs'. None on failure/NA.
+    """
+    if v is None or is_na(v):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v) if _finite(v) else None
+    s = str(v).strip().lower()
+    m = re.search(r"(\d+(?:\.\d+)?)", s)
+    if not m:
+        return None
+    n = float(m.group(1))
+    if re.search(r"year|yr|annum", s):
+        n *= 12.0
+    return n if _finite(n) else None
+

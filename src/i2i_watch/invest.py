@@ -26,6 +26,7 @@ from . import config as C
 from . import storage
 from .client import I2iClient, to_float
 from .notify.channels import send_telegram_text
+from .util import tenure_months
 
 log = logging.getLogger("i2i_watch")
 
@@ -52,8 +53,9 @@ def _first(d: dict, keys: tuple[str, ...]) -> object | None:
 
 
 def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT) -> list[dict]:
-    """Raw rows -> candidates with rate STRICTLY > min_rate, ranked rate desc then
-    credit score desc. Field names per config (HAR-verified)."""
+    """Raw rows -> candidates with rate STRICTLY > min_rate, ranked by importance:
+    rate desc, then credit score desc (no credit -> imputed 750), then tenure desc.
+    Field names per config (HAR-verified)."""
     out = []
     for ln in loans:
         if not isinstance(ln, dict):
@@ -61,14 +63,19 @@ def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT) -> li
         rate = to_float(_first(ln, C.RATE_FIELDS))
         if rate <= min_rate:
             continue
+        raw_score = ln.get("bloan_cibil_score")
+        no_credit = raw_score in (None, "") or to_float(raw_score) <= 0
+        score = C.NO_CREDIT_IMPUTED_SCORE if no_credit else to_float(raw_score)
         out.append({
             "loanId": _first(ln, C.LOAN_ID_FIELDS),
             "borrowerUserId": ln.get("pl_user_id"),
             "rate": rate,
-            "score": int(to_float(ln.get("bloan_cibil_score"))),
+            "score": score,
+            "noCredit": no_credit,
+            "tenure": to_float(tenure_months(ln.get("bloan_tenure") or ln.get("tenure"))),
             "amtLeft": to_float(ln.get("pl_amt_left")),
         })
-    return sorted(out, key=lambda x: (x["rate"], x["score"]), reverse=True)
+    return sorted(out, key=lambda x: (x["rate"], x["score"], x["tenure"]), reverse=True)
 
 
 def size_amount(amt_left: float, wallet: float, run_left: float,
@@ -133,6 +140,7 @@ def _plan(client: I2iClient, sel: list[dict], wallet0: float) -> list[dict]:
             "loanId": lid,
             "rate": to_float(d.get("pl_current_rate"), s["rate"]),
             "score": s["score"],
+            "noCredit": s.get("noCredit", False),
             "amount": amt,
             "payload": build_invest_payload(d, amt, s["rate"]),
         })
@@ -161,7 +169,8 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
     total = sum(p["amount"] for p in plan)
     print(f"\nPLAN ({'LIVE' if live else 'DRY RUN'}): {len(plan)} loan(s), Rs {total:,.0f} total")
     for p in plan:
-        print(f"  Loan {p['loanId']}: {p['rate']:.2f}% score {p['score']} -> Rs {p['amount']:,.0f}")
+        cs = "no-credit→750" if p.get("noCredit") else f"score {p['score']:.0f}"
+        print(f"  Loan {p['loanId']}: {p['rate']:.2f}% {cs} -> Rs {p['amount']:,.0f}")
 
     if not live:
         print("\nDRY RUN — placed nothing. Pass --live to invest for real.")
@@ -198,8 +207,9 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         lines = [f"\U0001f4b8 <b>i2i auto-invest: Rs {invested:,.0f} across "
                  f"{len(placed)} loan(s)</b> (&gt;{gate:.0f}%)"]
         for p in placed:
+            cs = "⚠ no credit score (ranked as 750)" if p.get("noCredit") else f"score {p['score']:.0f}"
             lines.append(f"• Loan {p['loanId']}: {p['rate']:.2f}% "
-                         f"score {p['score']} — Rs {p['amount']:,.0f}")
+                         f"{cs} — Rs {p['amount']:,.0f}")
         send_telegram_text("\n".join(lines))
     else:
         print("placed nothing")

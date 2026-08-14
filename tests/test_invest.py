@@ -55,6 +55,30 @@ def test_select_strictly_above_gate():
     assert select(rows, 40.0) == []  # 40 is NOT > 40
 
 
+def test_select_no_credit_imputed_750():
+    # equal rate: real 800 > no-credit(=750) > real 700
+    rows = [
+        {"pl_bloan_id": 1, "pl_applicable_rate": "46.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "46.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 3, "pl_applicable_rate": "46.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
+    ]
+    sel = select(rows, 40.0)
+    assert [s["loanId"] for s in sel] == [3, 2, 1]
+    no_credit = next(s for s in sel if s["loanId"] == 2)
+    assert no_credit["noCredit"] is True and no_credit["score"] == 750.0
+
+
+def test_select_tenure_breaks_rate_and_credit_tie():
+    # equal rate + equal credit -> longer tenure wins
+    rows = [
+        {"pl_bloan_id": 1, "pl_applicable_rate": "46.0", "bloan_cibil_score": 700,
+         "bloan_tenure": "3 Months", "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "46.0", "bloan_cibil_score": 700,
+         "bloan_tenure": "24 Months", "pl_amt_left": "5000"},
+    ]
+    assert [s["loanId"] for s in select(rows, 40.0)] == [2, 1]
+
+
 def test_size_caps_and_floors():
     assert size_amount(9000, 3200, 25000, 1000, 5000, 1) == 3200
     assert size_amount(500, 5000, 25000, 1000, 5000, 1) == 0

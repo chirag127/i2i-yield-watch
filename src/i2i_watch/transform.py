@@ -227,6 +227,8 @@ def format_loan_block(loan: dict) -> list[str]:
     credit_pieces = []
     if not is_na(loan.get("creditScore")):
         credit_pieces.append(f"Credit {loan['creditScore']}")
+    else:
+        credit_pieces.append("⚠ No credit score (ranked as 750)")
     if not is_na(loan.get("riskCategory")):
         credit_pieces.append(f"Risk {loan['riskCategory']}")
     if credit_pieces:
