@@ -134,7 +134,10 @@ def run(raw_rows: list[dict] | None = None) -> dict:
         results = notify_all(to_send, stats, dashboard_url, threshold)
         if was_any_channel_successful(results):
             storage.save_notify_state(sorted(qual_ids))
-            storage.mark_notifications_sent(sorted(qual_ids))
+            # Record ONLY the loans we actually notified in this run — NOT every
+            # qualifying loan. Marking all qual_ids "sent" silently absorbs loans
+            # that were never individually notified, so they can never fire later.
+            storage.mark_notifications_sent(sorted(str(ln["loanId"]) for ln in to_send))
             log.info("sent: %d loans, notify-state updated", len(to_send))
         else:
             log.warning("no channel succeeded — notify-state NOT updated, will retry next run")

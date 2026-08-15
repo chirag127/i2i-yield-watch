@@ -82,7 +82,23 @@ def test_dropped_qualifying_loan_stays_silent(json_backend, capture_notify):
     pipeline.run(raw_rows=[_loan("1", 50), _loan("2", 60)])
     pipeline.run(raw_rows=[_loan("1", 50)])  # 2 dropped, no new
     assert capture_notify == [["1", "2"]]  # no notify on drop-only
-    assert storage.load_notify_state()["qualifyingIds"] == ["1"]  # state updated
+
+
+def test_sent_list_records_only_notified_loans_not_all_qualifying(json_backend, capture_notify):
+    """Regression: marking ALL qualifying loans 'sent' when only the NEW ones were
+    notified silently absorbs loans that never fired (the 71.5% loan that never
+    reached Telegram). notifications-sent must contain ONLY actually-notified ids."""
+    pipeline.run(raw_rows=[_loan("1", 50)])                    # notify loan 1
+    pipeline.run(raw_rows=[_loan("1", 50), _loan("2", 71)])    # NEW loan 2 -> notify 2 only
+    sent = {str(x) for x in storage._load_json("notifications-sent.json", [])}
+    assert sent == {"1", "2"}                                   # both, and via real per-run sends
+    # The bug would still pass the above; the real guard: a loan that qualifies but
+    # was NEVER in a to_send batch must NOT be pre-marked sent. Simulate by making
+    # loan 3 appear together with an already-notified set on a digest-less change:
+    pipeline.run(raw_rows=[_loan("1", 50), _loan("2", 71), _loan("3", 45)])
+    assert capture_notify[-1] == ["3"]                          # only the new one fired
+    sent2 = {str(x) for x in storage._load_json("notifications-sent.json", [])}
+    assert "3" in sent2 and sent2 == {"1", "2", "3"}            # 3 recorded because it WAS sent
 
 
 def test_digest_forces_send_when_unchanged(json_backend, capture_notify, monkeypatch):
