@@ -181,12 +181,25 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         print(f"ERR --live needs {C.TXN_PIN_ENV} (transaction PIN) — STOP, placed nothing")
         return 1
 
-    placed, invested = [], 0.0
+    placed, invested, skipped = [], 0.0, 0
+    # A per-loan "you can invest maximum up to ₹X / already invested" rejection means
+    # THIS loan is maxed for this investor — skip it and keep going. Only genuinely
+    # dangerous errors (auth, network, unknown) abort the whole run.
+    def _is_loan_maxed(text: str) -> bool:
+        t = str(text).lower()
+        return ("maximum up to" in t) or ("already invested" in t) or ("max" in t and "in this loan" in t)
+
     for p in plan:
         p["payload"]["transactionPin"] = pin
         try:
             resp = client.invest(p["payload"])
         except Exception as e:  # noqa: BLE001
+            body = getattr(e, "i2i_body", "") or str(e)
+            if _is_loan_maxed(body):
+                log.warning("SKIP loan %s: already maxed for this investor (%s) — continuing",
+                            p["loanId"], str(body)[:120])
+                skipped += 1
+                continue
             log.error("ERR investorNow loan %s: %s — STOP (invested Rs %.0f, %d loan(s))",
                       p["loanId"], e, invested, len(placed))
             break
@@ -195,6 +208,10 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
             or "success" in str(resp.get("data", "")).lower())
         msg = (resp.get("message") or resp.get("data") or "") if isinstance(resp, dict) else str(resp)
         if not ok:
+            if _is_loan_maxed(msg):
+                log.warning("SKIP loan %s: already maxed (%s) — continuing", p["loanId"], str(msg)[:120])
+                skipped += 1
+                continue
             log.error("ERR loan %s not confirmed: %s — STOP (invested Rs %.0f)",
                       p["loanId"], msg, invested)
             break
@@ -212,7 +229,8 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
                          f"{cs} — Rs {p['amount']:,.0f}")
         send_telegram_text("\n".join(lines))
     else:
-        print("placed nothing")
+        print(f"placed nothing ({skipped} loan(s) skipped — already maxed for this investor)"
+              if skipped else "placed nothing")
     return 0
 
 

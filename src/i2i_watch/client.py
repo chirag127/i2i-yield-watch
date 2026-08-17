@@ -97,6 +97,9 @@ class I2iClient:
             except Exception:  # noqa: BLE001
                 err_body = "(could not read error body)"
             log.error("direct POST %s -> HTTP %d; i2i response: %s", path, e.code, err_body)
+            # Attach the response body + code so callers can classify the failure
+            # (e.g. a per-loan "max ₹5,000/already invested" 400 → skip, not abort).
+            e.i2i_body = err_body  # type: ignore[attr-defined]
             raise
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             log.warning("direct POST %s -> %s; browser-context fallback", path, type(e).__name__)
