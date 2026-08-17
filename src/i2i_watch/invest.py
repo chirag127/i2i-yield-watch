@@ -193,34 +193,63 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         t = str(text).lower()
         return ("escrow" in t and "balance" in t) or ("sufficient balance" in t) or ("available balance" in t)
 
+    def _parse_available(text: str) -> float:
+        """Extract i2i's stated available escrow balance, e.g.
+        'Available Balance ... is Rs. 3000.00' -> 3000.0. 0 if not found."""
+        import re
+        m = re.search(r"(?:rs\.?|₹)\s*([\d,]+(?:\.\d+)?)", str(text), re.I)
+        if m:
+            try:
+                return float(m.group(1).replace(",", ""))
+            except ValueError:
+                return 0.0
+        return 0.0
+
+    def _try_invest(payload: dict) -> tuple[bool, str, str]:
+        """Returns (ok, message, error_body). Never raises."""
+        try:
+            r = client.invest(payload)
+        except Exception as e:  # noqa: BLE001
+            return False, "", (getattr(e, "i2i_body", "") or str(e))
+        okr = isinstance(r, dict) and (
+            "success" in str(r.get("message", "")).lower()
+            or "success" in str(r.get("data", "")).lower())
+        m = (r.get("message") or r.get("data") or "") if isinstance(r, dict) else str(r)
+        return okr, str(m), ""
+
     low_balance_msg = ""
     for p in plan:
         p["payload"]["transactionPin"] = pin
-        try:
-            resp = client.invest(p["payload"])
-        except Exception as e:  # noqa: BLE001
-            body = getattr(e, "i2i_body", "") or str(e)
-            if _is_low_balance(body):
+        ok, msg, body = _try_invest(p["payload"])
+        # If it failed purely on low escrow balance, retry THIS loan with the
+        # available amount only (rounded down to the invest multiple), if that
+        # still meets the platform minimum. "Invest the remaining amount only."
+        if not ok and body and _is_low_balance(body):
+            avail = _parse_available(body)
+            reduced = math.floor(min(avail, p["amount"]) / C.INVEST_MULTIPLE) * C.INVEST_MULTIPLE \
+                if C.INVEST_MULTIPLE else min(avail, p["amount"])
+            if reduced >= C.INVEST_MIN_AMOUNT and reduced < p["amount"]:
+                log.warning("loan %s: low escrow (Rs %.0f avail) — retrying with Rs %.0f",
+                            p["loanId"], avail, reduced)
+                p["payload"]["amount"] = int(reduced)
+                p["amount"] = reduced
+                ok, msg, body = _try_invest(p["payload"])
+        if not ok:
+            if body and _is_low_balance(body):
                 low_balance_msg = str(body)[:200]
                 log.warning("LOW BALANCE on loan %s: %s — STOP placing, will notify", p["loanId"], low_balance_msg)
                 break
-            if _is_loan_maxed(body):
-                log.warning("SKIP loan %s: already maxed for this investor (%s) — continuing",
-                            p["loanId"], str(body)[:120])
+            if (body and _is_loan_maxed(body)) or _is_loan_maxed(msg):
+                log.warning("SKIP loan %s: already maxed (%s) — continuing",
+                            p["loanId"], str(body or msg)[:120])
                 skipped += 1
                 continue
-            log.error("ERR investorNow loan %s: %s — STOP (invested Rs %.0f, %d loan(s))",
-                      p["loanId"], e, invested, len(placed))
+            log.error("ERR investorNow loan %s: %s%s — STOP (invested Rs %.0f, %d loan(s))",
+                      p["loanId"], msg, (" / " + body if body else ""), invested, len(placed))
             break
-        ok = isinstance(resp, dict) and (
-            "success" in str(resp.get("message", "")).lower()
-            or "success" in str(resp.get("data", "")).lower())
-        msg = (resp.get("message") or resp.get("data") or "") if isinstance(resp, dict) else str(resp)
-        if not ok:
-            if _is_low_balance(msg):
-                low_balance_msg = str(msg)[:200]
-                log.warning("LOW BALANCE on loan %s: %s — STOP placing, will notify", p["loanId"], low_balance_msg)
-                break
+        invested += p["amount"]
+        placed.append(p)
+        print(f"  OK loan {p['loanId']}: Rs {p['amount']:,.0f} — {msg}")
             if _is_loan_maxed(msg):
                 log.warning("SKIP loan %s: already maxed (%s) — continuing", p["loanId"], str(msg)[:120])
                 skipped += 1
