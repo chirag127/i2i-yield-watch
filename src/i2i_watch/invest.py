@@ -218,6 +218,7 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         return okr, str(m), ""
 
     low_balance_msg = ""
+    reduced_retry_used = False
     for p in plan:
         p["payload"]["transactionPin"] = pin
         ok, msg, body = _try_invest(p["payload"])
@@ -233,6 +234,7 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
                             p["loanId"], avail, reduced)
                 p["payload"]["amount"] = int(reduced)
                 p["amount"] = reduced
+                reduced_retry_used = True
                 ok, msg, body = _try_invest(p["payload"])
         if not ok:
             if body and _is_low_balance(body):
@@ -251,17 +253,25 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         placed.append(p)
         print(f"  OK loan {p['loanId']}: Rs {p['amount']:,.0f} — {msg}")
 
-    # Low-balance alert: tell the operator to top up the i2i escrow account.
-    if low_balance_msg:
+    # Low-balance alert: tell the operator to ADD BALANCE to the i2i escrow account.
+    # Fires when escrow ran dry with more qualifying loans still available — whether
+    # the run stopped on a low-balance 400 OR invested the last rupees via the
+    # reduced-amount retry (escrow now ~0 but candidates remain unfunded).
+    ran_dry = bool(low_balance_msg) or (len(placed) < len(plan) and reduced_retry_used)
+    if ran_dry:
+        remaining_loans = len(plan) - len(placed) - skipped
         try:
             send_telegram_text(
-                "⚠️ <b>i2i auto-invest: LOW ESCROW BALANCE</b>\n"
-                f"Could not place all planned investments — top up your i2i Escrow Account.\n"
-                f"i2i said: <i>{low_balance_msg}</i>"
-                + (f"\nPlaced Rs {invested:,.0f} in {len(placed)} loan(s) before running low." if placed else "")
+                "⚠️ <b>i2i auto-invest: ADD BALANCE</b>\n"
+                f"Your i2i Escrow Account is low — please add funds so pending high-rate "
+                f"loans can be invested.\n"
+                + (f"Placed Rs {invested:,.0f} in {len(placed)} loan(s) this run; "
+                   f"{remaining_loans} qualifying loan(s) still need funding.\n" if placed
+                   else f"Placed nothing this run; {remaining_loans} qualifying loan(s) waiting on balance.\n")
+                + (f"i2i said: <i>{low_balance_msg}</i>" if low_balance_msg else "")
             )
         except Exception:  # noqa: BLE001
-            log.warning("failed to send low-balance Telegram alert")
+            log.warning("failed to send add-balance Telegram alert")
 
     if placed:
         storage.record_invested([int(p["loanId"]) for p in placed])
