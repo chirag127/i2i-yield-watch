@@ -189,12 +189,21 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         t = str(text).lower()
         return ("maximum up to" in t) or ("already invested" in t) or ("max" in t and "in this loan" in t)
 
+    def _is_low_balance(text: str) -> bool:
+        t = str(text).lower()
+        return ("escrow" in t and "balance" in t) or ("sufficient balance" in t) or ("available balance" in t)
+
+    low_balance_msg = ""
     for p in plan:
         p["payload"]["transactionPin"] = pin
         try:
             resp = client.invest(p["payload"])
         except Exception as e:  # noqa: BLE001
             body = getattr(e, "i2i_body", "") or str(e)
+            if _is_low_balance(body):
+                low_balance_msg = str(body)[:200]
+                log.warning("LOW BALANCE on loan %s: %s — STOP placing, will notify", p["loanId"], low_balance_msg)
+                break
             if _is_loan_maxed(body):
                 log.warning("SKIP loan %s: already maxed for this investor (%s) — continuing",
                             p["loanId"], str(body)[:120])
@@ -208,6 +217,10 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
             or "success" in str(resp.get("data", "")).lower())
         msg = (resp.get("message") or resp.get("data") or "") if isinstance(resp, dict) else str(resp)
         if not ok:
+            if _is_low_balance(msg):
+                low_balance_msg = str(msg)[:200]
+                log.warning("LOW BALANCE on loan %s: %s — STOP placing, will notify", p["loanId"], low_balance_msg)
+                break
             if _is_loan_maxed(msg):
                 log.warning("SKIP loan %s: already maxed (%s) — continuing", p["loanId"], str(msg)[:120])
                 skipped += 1
@@ -218,6 +231,18 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         invested += p["amount"]
         placed.append(p)
         print(f"  OK loan {p['loanId']}: Rs {p['amount']:,.0f} — {msg}")
+
+    # Low-balance alert: tell the operator to top up the i2i escrow account.
+    if low_balance_msg:
+        try:
+            send_telegram_text(
+                "⚠️ <b>i2i auto-invest: LOW ESCROW BALANCE</b>\n"
+                f"Could not place all planned investments — top up your i2i Escrow Account.\n"
+                f"i2i said: <i>{low_balance_msg}</i>"
+                + (f"\nPlaced Rs {invested:,.0f} in {len(placed)} loan(s) before running low." if placed else "")
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("failed to send low-balance Telegram alert")
 
     if placed:
         storage.record_invested([int(p["loanId"]) for p in placed])

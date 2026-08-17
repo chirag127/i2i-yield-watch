@@ -130,12 +130,22 @@ class I2iClient:
 
     # ── reads ────────────────────────────────────────────────────────────────
     def wallet(self) -> float:
-        """Idle wallet balance (Rs) = data.availableWallet (HAR-verified)."""
+        """Investable balance (Rs). i2i's investorNow validates against the ESCROW
+        account balance, NOT data.availableWallet — so prefer an escrow/investable
+        field when present (availableEscrow / escrowBalance / availableForInvestment),
+        falling back to availableWallet, then availableFunds. Logs the raw keys once
+        so the exact field is discoverable from run logs."""
         try:
             d = self._get(C.OPEN_LOANS_HOST, "investor/walletAndFund", timeout=30)
-            w = d.get("data", {}).get("availableWallet")
-            if w is not None:
-                return to_float(w)
+            data = d.get("data", {}) if isinstance(d, dict) else {}
+            if isinstance(data, dict):
+                log.info("walletAndFund fields: %s", sorted(data.keys()))
+                for k in ("availableEscrow", "escrowBalance", "availableForInvestment",
+                          "escrowAmount", "availableFund", "availableWallet"):
+                    if data.get(k) is not None:
+                        val = to_float(data.get(k))
+                        log.info("wallet(): using %s = Rs %.2f", k, val)
+                        return val
         except Exception:  # noqa: BLE001
             pass
         try:
