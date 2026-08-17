@@ -211,10 +211,14 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
             r = client.invest(payload)
         except Exception as e:  # noqa: BLE001
             return False, "", (getattr(e, "i2i_body", "") or str(e))
-        okr = isinstance(r, dict) and (
-            "success" in str(r.get("message", "")).lower()
-            or "success" in str(r.get("data", "")).lower())
         m = (r.get("message") or r.get("data") or "") if isinstance(r, dict) else str(r)
+        ml = str(m).lower()
+        # Exact success signal — NOT a substring ('success' in 'unsuccessful' is a
+        # false positive). i2i success bodies: "Invested Successfully" / "Fund added
+        # successfully". Require a word-boundary success AND no negation.
+        okr = isinstance(r, dict) and (
+            "successfully" in ml or "invested success" in ml or "fund added" in ml
+        ) and "unsuccess" not in ml and "not " not in ml and "fail" not in ml
         return okr, str(m), ""
 
     low_balance_msg = ""
@@ -251,6 +255,13 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
             break
         invested += p["amount"]
         placed.append(p)
+        # Record IMMEDIATELY (not just after the loop): if a later loan crashes the
+        # run, an already-placed loan must still be in invested-loans.json so the
+        # next run's dedup won't re-invest it.
+        try:
+            storage.record_invested([int(p["loanId"])])
+        except Exception:  # noqa: BLE001
+            log.warning("failed to record invested loan %s immediately (will retry after loop)", p["loanId"])
         print(f"  OK loan {p['loanId']}: Rs {p['amount']:,.0f} — {msg}")
 
     # Low-balance alert: tell the operator to ADD BALANCE to the i2i escrow account.

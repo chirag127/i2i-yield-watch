@@ -99,3 +99,23 @@ def test_build_invest_payload_replicates_har_fields():
     }
     assert p["monthlyEMI"] == 165.92 and p["intRate"] == "46.66" and p["tenure"] == 7
     assert p["transactionPin"] is None  # filled only at placement
+
+
+def test_investorNow_no_retry_on_timeout_prevents_double_spend():
+    """CRITICAL money-safety: a timeout on the non-idempotent investorNow call must
+    NOT fall back to a browser re-POST — the order may already be placed upstream."""
+    from unittest.mock import patch
+    from i2i_watch.client import I2iClient
+    c = I2iClient.__new__(I2iClient)
+    c._force_browser = False
+    c._url = lambda h, p: "http://x/" + p
+    called = {"browser": False}
+    c._browser_post = lambda *a, **k: called.__setitem__("browser", True) or {}
+    import urllib.error
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("boom")):
+        try:
+            c._post("h", "investor/investorNow/", {"a": 1}, no_retry=True)
+            assert False, "should have raised, not retried"
+        except TimeoutError:
+            pass
+    assert called["browser"] is False  # never re-POSTed the money call

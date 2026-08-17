@@ -72,11 +72,16 @@ class I2iClient:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
 
-    def _post(self, host: str, path: str, body: dict, timeout: int = 60) -> dict:
+    def _post(self, host: str, path: str, body: dict, timeout: int = 60,
+              no_retry: bool = False) -> dict:
         """Direct POST; on 502/403 OR timeout/connection error fall back to a
         browser-context POST (the listing endpoint hangs on a fragile direct
-        socket in some networks — widen the trigger so the browser catches it)."""
-        if self._force_browser:
+        socket in some networks — widen the trigger so the browser catches it).
+
+        no_retry=True DISABLES every fallback/retry — required for NON-idempotent
+        money calls (investorNow): a timeout AFTER the order was placed must NOT
+        silently re-POST (double-spend). The caller re-raises and the run STOPs."""
+        if self._force_browser and not no_retry:
             return self._browser_post(host, path, body, timeout)
         req = urllib.request.Request(
             self._url(host, path), data=json.dumps(body).encode("utf-8"),
@@ -86,7 +91,7 @@ class I2iClient:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
-            if e.code in (502, 403):
+            if e.code in (502, 403) and not no_retry:
                 log.warning("direct POST %s -> %d; browser-context fallback", path, e.code)
                 return self._browser_post(host, path, body, timeout)
             # Surface the upstream error body (e.g. investorNow 400 rejection reason)
@@ -102,6 +107,13 @@ class I2iClient:
             e.i2i_body = err_body  # type: ignore[attr-defined]
             raise
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if no_retry:
+                # Non-idempotent money call timed out — the order MAY have been
+                # placed upstream. NEVER re-POST. Raise so the run stops and the
+                # operator reconciles manually rather than risking a double-spend.
+                log.error("direct POST %s -> %s; no_retry set (money call) — NOT retrying, raising",
+                          path, type(e).__name__)
+                raise
             log.warning("direct POST %s -> %s; browser-context fallback", path, type(e).__name__)
             return self._browser_post(host, path, body, timeout)
 
@@ -217,7 +229,7 @@ class I2iClient:
     def invest(self, payload: dict) -> dict:
         """POST investor/investorNow/ (market host). payload carries transactionPin.
         Success resp: {"data":"Invested Successfully","message":"Fund added successfully."}."""
-        return self._post(C.OPEN_LOANS_HOST, "investor/investorNow/", payload)
+        return self._post(C.OPEN_LOANS_HOST, "investor/investorNow/", payload, no_retry=True)
 
     def cancel(self, loan_id: int, pin: str) -> dict:
         """POST investor/cancel/funding (LEGACY apiv1 host). Success:
