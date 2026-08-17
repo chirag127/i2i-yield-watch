@@ -89,6 +89,14 @@ class I2iClient:
             if e.code in (502, 403):
                 log.warning("direct POST %s -> %d; browser-context fallback", path, e.code)
                 return self._browser_post(host, path, body, timeout)
+            # Surface the upstream error body (e.g. investorNow 400 rejection reason)
+            # so the exact failing field is visible in logs. Never log the request
+            # payload (may carry transactionPin); log only i2i's response text.
+            try:
+                err_body = e.read().decode("utf-8", "replace")[:500]
+            except Exception:  # noqa: BLE001
+                err_body = "(could not read error body)"
+            log.error("direct POST %s -> HTTP %d; i2i response: %s", path, e.code, err_body)
             raise
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             log.warning("direct POST %s -> %s; browser-context fallback", path, type(e).__name__)
