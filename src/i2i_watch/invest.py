@@ -250,16 +250,6 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         invested += p["amount"]
         placed.append(p)
         print(f"  OK loan {p['loanId']}: Rs {p['amount']:,.0f} — {msg}")
-            if _is_loan_maxed(msg):
-                log.warning("SKIP loan %s: already maxed (%s) — continuing", p["loanId"], str(msg)[:120])
-                skipped += 1
-                continue
-            log.error("ERR loan %s not confirmed: %s — STOP (invested Rs %.0f)",
-                      p["loanId"], msg, invested)
-            break
-        invested += p["amount"]
-        placed.append(p)
-        print(f"  OK loan {p['loanId']}: Rs {p['amount']:,.0f} — {msg}")
 
     # Low-balance alert: tell the operator to top up the i2i escrow account.
     if low_balance_msg:
