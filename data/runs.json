@@ -1,41 +1,5 @@
 [
   {
-    "runId": "run_1786834257431",
-    "startedAt": "2026-08-15T22:50:57.431462Z",
-    "completedAt": "2026-08-15T22:51:35.420683Z",
-    "loansFound": 53,
-    "newLoans": 0,
-    "loansArchived": 0,
-    "qualifyingLoans": 11,
-    "newQualifyingLoans": 0,
-    "droppedQualifyingLoans": 0,
-    "rateThreshold": 40.0,
-    "errors": [],
-    "notificationsSent": {
-      "telegram": false,
-      "ntfy": false
-    },
-    "updatedAt": "2026-08-15T22:51:35.421669Z"
-  },
-  {
-    "runId": "run_1786834385424",
-    "startedAt": "2026-08-15T22:53:05.424964Z",
-    "completedAt": "2026-08-15T22:53:41.905360Z",
-    "loansFound": 53,
-    "newLoans": 0,
-    "loansArchived": 0,
-    "qualifyingLoans": 11,
-    "newQualifyingLoans": 0,
-    "droppedQualifyingLoans": 0,
-    "rateThreshold": 40.0,
-    "errors": [],
-    "notificationsSent": {
-      "telegram": false,
-      "ntfy": false
-    },
-    "updatedAt": "2026-08-15T22:53:41.906338Z"
-  },
-  {
     "runId": "run_1786836197996",
     "startedAt": "2026-08-15T23:23:17.996568Z",
     "completedAt": "2026-08-15T23:23:54.847673Z",
@@ -3598,5 +3562,41 @@
       "ntfy": false
     },
     "updatedAt": "2026-08-18T06:50:50.705906Z"
+  },
+  {
+    "runId": "run_1787037956918",
+    "startedAt": "2026-08-18T07:25:56.918645Z",
+    "completedAt": "2026-08-18T07:26:19.053541Z",
+    "loansFound": 20,
+    "newLoans": 4,
+    "loansArchived": 5,
+    "qualifyingLoans": 5,
+    "newQualifyingLoans": 4,
+    "droppedQualifyingLoans": 2,
+    "rateThreshold": 40.0,
+    "errors": [],
+    "notificationsSent": {
+      "telegram": true,
+      "ntfy": false
+    },
+    "updatedAt": "2026-08-18T07:26:19.055401Z"
+  },
+  {
+    "runId": "run_1787038069058",
+    "startedAt": "2026-08-18T07:27:49.058676Z",
+    "completedAt": "2026-08-18T07:28:09.215547Z",
+    "loansFound": 20,
+    "newLoans": 0,
+    "loansArchived": 0,
+    "qualifyingLoans": 5,
+    "newQualifyingLoans": 0,
+    "droppedQualifyingLoans": 0,
+    "rateThreshold": 40.0,
+    "errors": [],
+    "notificationsSent": {
+      "telegram": false,
+      "ntfy": false
+    },
+    "updatedAt": "2026-08-18T07:28:09.217690Z"
   }
 ]
