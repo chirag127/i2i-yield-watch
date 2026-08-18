@@ -103,19 +103,34 @@ Places (and reverses) investments via **direct HTTP** to the i2i API with **auto
 
 Modular split: `config.py` (all tunables), `auth.py` (AES login), `client.py` (all HTTP, one place), `invest.py` (pure select/rank/size/EMI + orchestrator), `cancel.py` (thin).
 
-- **Login:** POST `.../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Fresh `session_id` + `csrf_token` every run — token expiry is a non-issue.
+- **Login:** POST `.../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Fresh `session_id` + `csrf_token` every run — token expiry is a non-issue. **Auth chain:** auto-login is the primary path; `I2I_CSRF_TOKEN` + `I2I_SESSION_ID` (captured from a HAR) are used only as a fallback if login fails or no creds are set — session tokens expire, so they must never be the primary auth.
 - **Select + rank:** loans with rate **strictly > `AUTOINVEST_MIN_RATE_PCT`** (default **100**), ranked rate desc then `bloan_cibil_score` desc.
 - **Size:** `min(PER_LOAN_CAP, amtLeft, wallet)`, floored to `invest_multiple_value` and whole rupees, skipped if `< INVEST_MIN_AMOUNT`. A run keeps going down the ranked list until the wallet is exhausted (no per-run cap).
 - **Dry-run default** — prints the plan, places nothing. `--live` places for real (requires `I2I_TXN_PIN`). Any error mid-run STOPS.
 
 ```bash
-python -m i2i_watch invest            # DRY RUN — plan only
-python -m i2i_watch invest --live     # REAL money
+python -m i2i_watch invest                    # DRY RUN — plan only (default account)
+python -m i2i_watch invest --account neeru    # DRY RUN for the neeru account
+python -m i2i_watch invest --live             # REAL money (default account)
 python -m i2i_watch cancel <loanId>…          # DRY RUN of cancel
 python -m i2i_watch cancel <loanId> --live    # reverse funding(s)
 ```
 
-CI: `.github/workflows/invest.yml` runs `invest --live` hourly in the IST daytime window. Requires secrets `I2I_EMAIL`, `I2I_PASSWORD`, `I2I_TXN_PIN` (+ `TELEGRAM_*` for the summary).
+**Multi-account portfolio** (`accounts.py`): the platform caps ~₹5,000 per loan per
+investor, so the portfolio runs one account per i2i login — each with its OWN
+auth, rate gate and `data/invested-loans-<acct>.json` dedup namespace. The default
+account (`chirag`) keeps the legacy unprefixed env names; every secondary account
+uses `I2I_<ACCOUNT>_*` (e.g. `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`,
+`I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT`). Select the account with
+`--account <name>` or `I2I_ACCOUNT=<name>`; declare the whole portfolio with
+`I2I_ACCOUNTS=chirag,neeru`. Adding a third account = add its name + env vars +
+a row in the `invest.yml` matrix.
+
+CI: `.github/workflows/invest.yml` runs a **matrix** — one `invest --live` job per
+account (chirag >100%, neeru >150%) in the IST daytime window. Requires per-account
+secrets `I2I_EMAIL`/`I2I_PASSWORD`/`I2I_TXN_PIN` (chirag) and `I2I_NEERU_*`
+(neeru) + `TELEGRAM_*` for the summary; CSRF/SESSION tokens are optional fallback
+auth (refresh from a HAR when login is unavailable).
 
 ---
 

@@ -203,7 +203,7 @@ class _FakeClient:
 
 class _NoAuthClient:
     @classmethod
-    def from_env(cls):
+    def from_env(cls, account=None):
         raise SystemExit("no auth (test)")
 
 
@@ -280,7 +280,7 @@ def test_run_excludes_invested(monkeypatch, capsys):
          "bloan_cibil_score": 700, "pl_amt_left": "5000", "bloan_tenure": 6},
     ]
     monkeypatch.setattr(src, "fetch_all_loans", lambda: rows)
-    monkeypatch.setattr(INV.storage, "load_invested", lambda: [1])
+    monkeypatch.setattr(INV.storage, "load_invested", lambda **kw: [1])
     monkeypatch.setattr(INV, "I2iClient", _NoAuthClient)
     assert INV.run(live=False) == 0
     assert "1 loans >100%" in capsys.readouterr().out

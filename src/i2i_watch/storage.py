@@ -409,19 +409,30 @@ def update_stats(active: list[dict], newly_archived: int = 0) -> None:
     log.info("stats updated")
 
 
-def load_invested() -> list[int]:
-    """loanIds placed by the auto-investor (JSON git-as-DB only)."""
+def _invested_file(account: str | None = None) -> str:
+    """Per-account invested-loans file: legacy invested-loans.json for the
+    default account; invested-loans-<account>.json for every secondary one, so
+    dedup and cancel --all-invested never cross accounts."""
+    from . import accounts
+
+    acct = account or accounts.active_account()
+    return f"invested-loans{accounts.storage_name(acct)}.json"
+
+
+def load_invested(account: str | None = None) -> list[int]:
+    """loanIds placed by the auto-investor for this account (JSON backend only)."""
     try:
-        return [int(x) for x in _load_json("invested-loans.json", [])]
+        return [int(x) for x in _load_json(_invested_file(account), [])]
     except Exception:  # noqa: BLE001
         return []
 
 
-def record_invested(loan_ids: list[int]) -> None:
-    """Append placed loanIds to data/invested-loans.json (for cancel --all-invested)."""
-    merged = sorted(set(load_invested()) | {int(x) for x in loan_ids})
-    _write_json("invested-loans.json", merged)
-    log.info("recorded %d invested loan(s)", len(loan_ids))
+def record_invested(loan_ids: list[int], account: str | None = None) -> None:
+    """Append placed loanIds to this account's invested-loans file
+    (for cancel --all-invested + cross-run dedup)."""
+    merged = sorted(set(load_invested(account)) | {int(x) for x in loan_ids})
+    _write_json(_invested_file(account), merged)
+    log.info("recorded %d invested loan(s) for %s", len(loan_ids), _invested_file(account))
 
 
 def append_changelog(run_summary: dict) -> None:

@@ -43,24 +43,43 @@ class I2iClient:
         self._force_browser = force_browser
 
     @classmethod
-    def from_env(cls) -> "I2iClient":
-        """Auto-login when creds present (fresh tokens => no expiry); else the
-        manual I2I_CSRF_TOKEN / I2I_SESSION_ID pair if set."""
+    def from_env(cls, account: str | None = None) -> "I2iClient":
+        """Auth chain, best-first: (1) AUTO-LOGIN when creds are present — fresh
+        tokens every run, so session expiry can never strand a money run;
+        (2) the manual CSRF/SESSION token pair, used as a FALLBACK when login
+        is unavailable or transiently fails (e.g. a network blip at run time),
+        and directly when no creds are set. Raises SystemExit only when NO
+        auth is available at all.
+
+        Account-aware: env vars resolve per-account (accounts.env_key) —
+        I2I_NEERU_EMAIL/I2I_NEERU_PASSWORD for account 'neeru', legacy
+        I2I_EMAIL/I2I_PASSWORD for the default account."""
         import os
 
+        from . import accounts
+
+        acct = account or accounts.active_account()
         force = bool(os.environ.get("I2I_FORCE_BROWSER", "").strip())
-        email = (os.environ.get(C.LOGIN_EMAIL_ENV) or "").strip()
-        pw = (os.environ.get(C.LOGIN_PASSWORD_ENV) or "").strip()
+        email = (os.environ.get(accounts.env_key(acct, "EMAIL")) or "").strip()
+        pw = (os.environ.get(accounts.env_key(acct, "PASSWORD")) or "").strip()
+        csrf = (os.environ.get(accounts.env_key(acct, "CSRF_TOKEN")) or "").strip()
+        sid = (os.environ.get(accounts.env_key(acct, "SESSION_ID")) or "").strip()
         if email and pw:
-            csrf, sid = login(email, pw)
-            return cls(csrf, sid, force)
-        csrf = (os.environ.get("I2I_CSRF_TOKEN") or "").strip()
-        sid = (os.environ.get("I2I_SESSION_ID") or "").strip()
+            try:
+                fresh_csrf, fresh_sid = login(email, pw)
+                return cls(fresh_csrf, fresh_sid, force)
+            except Exception:  # noqa: BLE001 — login failed (network, bad creds)
+                if csrf and sid:
+                    log.warning("auto-login failed for account %s; falling back to "
+                                "manual CSRF/SESSION tokens", acct)
+                    return cls(csrf, sid, force)
+                raise
         if csrf and sid:
             return cls(csrf, sid, force)
         raise SystemExit(
-            f"no i2i auth: set {C.LOGIN_EMAIL_ENV}+{C.LOGIN_PASSWORD_ENV} "
-            "(preferred, auto-login) or I2I_CSRF_TOKEN+I2I_SESSION_ID"
+            f"no i2i auth for account '{acct}': set "
+            f"{accounts.env_key(acct, 'EMAIL')}+{accounts.env_key(acct, 'PASSWORD')} "
+            "(preferred, auto-login) or CSRF/SESSION tokens"
         )
 
     def _url(self, host: str, path: str) -> str:

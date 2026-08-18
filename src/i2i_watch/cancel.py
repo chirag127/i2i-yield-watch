@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 
+from . import accounts
 from . import config as C
 from . import storage
 from .client import I2iClient
@@ -25,10 +26,12 @@ from .notify.channels import send_telegram_text
 log = logging.getLogger("i2i_watch")
 
 
-def run(loan_ids: list[int], live: bool = False, all_invested: bool = False) -> int:
+def run(loan_ids: list[int], live: bool = False, all_invested: bool = False,
+        account: str | None = None) -> int:
+    acct = account or accounts.active_account()
     ids = list(loan_ids or [])
     if all_invested:
-        ids = sorted(set(ids) | set(storage.load_invested()))
+        ids = sorted(set(ids) | set(storage.load_invested(account=acct)))
     if not ids:
         print("no loanIds given (pass loanId(s) or --all-invested) -> nothing to cancel")
         return 0
@@ -38,12 +41,13 @@ def run(loan_ids: list[int], live: bool = False, all_invested: bool = False) -> 
         print("DRY RUN — cancelled nothing. Pass --live to cancel for real.")
         return 0
 
-    pin = (os.environ.get(C.TXN_PIN_ENV) or "").strip()
+    pin = (os.environ.get(accounts.env_key(acct, "TXN_PIN")) or "").strip()
     if not pin:
-        print(f"ERR --live needs {C.TXN_PIN_ENV} (transaction PIN) — STOP, cancelled nothing")
+        print(f"ERR --live needs {accounts.env_key(acct, 'TXN_PIN')} "
+              f"(transaction PIN) — STOP, cancelled nothing")
         return 1
 
-    client = I2iClient.from_env()
+    client = I2iClient.from_env(acct)
     done = []
     for lid in ids:
         try:

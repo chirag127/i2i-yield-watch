@@ -25,6 +25,7 @@ import math
 import os
 import re
 
+from . import accounts
 from . import config as C
 from . import storage
 from .client import I2iClient, to_float
@@ -190,7 +191,7 @@ def _plan(client: I2iClient, sel: list[dict], wallet0: float) -> list[dict]:
 
 
 def _place(client: I2iClient, loans: list[dict], sel: list[dict],
-           wallet: float, gate: float, live: bool) -> int:
+           wallet: float, gate: float, live: bool, account: str | None = None) -> int:
     print(f"{len(loans)} open loans | {len(sel)} loans >{gate:.0f}% | wallet Rs {wallet:,.0f}")
     if wallet < C.INVEST_MIN_AMOUNT + C.MIN_WALLET_BUFFER:
         print(f"wallet Rs {wallet:,.0f} below min invest + buffer -> nothing to invest")
@@ -215,9 +216,11 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         print("\nDRY RUN — placed nothing. Pass --live to invest for real.")
         return 0
 
-    pin = (os.environ.get(C.TXN_PIN_ENV) or "").strip()
+    acct = account or accounts.active_account()
+    pin = (os.environ.get(accounts.env_key(acct, "TXN_PIN")) or "").strip()
     if not pin:
-        print(f"ERR --live needs {C.TXN_PIN_ENV} (transaction PIN) — STOP, placed nothing")
+        print(f"ERR --live needs {accounts.env_key(acct, 'TXN_PIN')} "
+              f"(transaction PIN) — STOP, placed nothing")
         return 1
 
     placed, invested, skipped = [], 0.0, 0
@@ -288,10 +291,10 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         invested += p["amount"]
         placed.append(p)
         # Record IMMEDIATELY (not just after the loop): if a later loan crashes the
-        # run, an already-placed loan must still be in invested-loans.json so the
-        # next run's dedup won't re-invest it.
+        # run, an already-placed loan must still be in this account's invested-loans
+        # file so the next run's dedup won't re-invest it.
         try:
-            storage.record_invested([int(p["loanId"])])
+            storage.record_invested([int(p["loanId"])], account=account)
         except Exception:  # noqa: BLE001
             log.warning("failed to record invested loan %s immediately (will retry after loop)", p["loanId"])
         print(f"  OK loan {p['loanId']}: Rs {p['amount']:,.0f} — {msg}")
@@ -317,15 +320,16 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
             log.warning("failed to send add-balance Telegram alert")
 
     if placed:
-        storage.record_invested([int(p["loanId"]) for p in placed])
-        lines = [f"\U0001f4b8 <b>i2i auto-invest: Rs {invested:,.0f} across "
+        storage.record_invested([int(p["loanId"]) for p in placed], account=account)
+        acct_label = f" ({account})" if account else ""
+        lines = [f"\U0001f4b8 <b>i2i auto-invest{acct_label}: Rs {invested:,.0f} across "
                  f"{len(placed)} loan(s)</b> (&gt;{gate:.0f}%)"]
         for p in placed:
             cs = "⚠ no credit score (ranked as 750)" if p.get("noCredit") else f"score {p['score']:.0f}"
             lines.append(f"• Loan {p['loanId']}: {p['rate']:.2f}% "
                          f"{cs} — Rs {p['amount']:,.0f}")
         try:
-            send_telegram_text("\n".join(lines))
+            send_telegram_text("\n".join(lines), silent=True)
         except Exception:  # noqa: BLE001
             log.warning("failed to send invest summary Telegram alert")
     else:
@@ -334,9 +338,12 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
     return 0
 
 
-def run(live: bool = False) -> int:
-    """One auto-invest cycle. Dry-run unless live=True. Returns a process rc."""
-    gate = C.AUTOINVEST_MIN_RATE_PCT
+def run(live: bool = False, account: str | None = None) -> int:
+    """One auto-invest cycle for ONE account. Dry-run unless live=True.
+    account=None -> accounts.active_account() (I2I_ACCOUNT env, else default).
+    Returns a process rc."""
+    acct = account or accounts.active_account()
+    gate = accounts.get_float(acct, "AUTOINVEST_MIN_RATE_PCT", C.AUTOINVEST_MIN_RATE_PCT)
 
     from .sources.i2i import fetch_all_loans
     try:
@@ -346,7 +353,7 @@ def run(live: bool = False) -> int:
         return 1
 
     sel = select(loans, gate)
-    sel = exclude_invested(sel, set(storage.load_invested()))
+    sel = exclude_invested(sel, set(storage.load_invested(account=acct)))
     if not sel:
         # gate above the market max, or every qualifying loan already funded
         msg = (f"{len(loans)} open loans | {len(sel)} loans >{gate:.0f}% "
@@ -356,12 +363,12 @@ def run(live: bool = False) -> int:
         return 0
 
     try:
-        client = I2iClient.from_env()
+        client = I2iClient.from_env(acct)
     except SystemExit as e:  # no creds: scrape + ranking path ran; place nothing
         log.warning("%s", e)
         print(f"{len(loans)} open loans | {len(sel)} loans >{gate:.0f}% | "
-              f"no auth -> wallet 0, placing nothing")
+              f"no auth for '{acct}' -> wallet 0, placing nothing")
         return 0
 
     wallet = client.wallet()
-    return _place(client, loans, sel, wallet, gate, live)
+    return _place(client, loans, sel, wallet, gate, live, account=acct)

@@ -1,11 +1,11 @@
-"""CLI: python -m i2i_watch [--iterations N] [--interval S] [-v]
+"""CLI: python -m i2i_watch [--iterations N] [--interval S] [-v] [--account NAME]
 
 Default (no subcommand): scrape/monitor loop. Self-loop (--iterations>1)
 approximates sub-hourly polling inside one GitHub Actions run.
 
 Subcommands:
-  invest [--live]            place investments (dry-run unless --live)
-  cancel <loanId>… [--live]  reverse fundings (dry-run unless --live)
+  invest [--live] [--account NAME]   place investments (dry-run unless --live)
+  cancel <loanId>… [--live]          reverse fundings (dry-run unless --live)
 """
 
 from __future__ import annotations
@@ -21,13 +21,14 @@ from .util import configure_logging, log
 def _cmd_invest(args) -> int:
     from .invest import run as invest_run
 
-    return invest_run(live=args.live)
+    return invest_run(live=args.live, account=args.account)
 
 
 def _cmd_cancel(args) -> int:
     from .cancel import run as cancel_run
 
-    return cancel_run(loan_ids=args.loan_ids, live=args.live, all_invested=args.all_invested)
+    return cancel_run(loan_ids=args.loan_ids, live=args.live,
+                      all_invested=args.all_invested, account=args.account)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,15 +38,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--reset-notify-state", action="store_true",
                    help="clear notify-state before running so all currently-qualifying loans re-announce once")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--account", default=None,
+                   help="portfolio account to run for (I2I_ACCOUNT env, else default; e.g. neeru)")
 
     sub = p.add_subparsers(dest="cmd")
     pi = sub.add_parser("invest", help="place investments (dry-run unless --live)")
     pi.add_argument("--live", action="store_true", help="place REAL money (default: dry-run)")
+    pi.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
     pi.add_argument("-v", "--verbose", action="store_true")
     pc = sub.add_parser("cancel", help="reverse fundings (dry-run unless --live)")
     pc.add_argument("loan_ids", nargs="*", type=int, help="loanId(s) to cancel")
     pc.add_argument("--all-invested", action="store_true",
-                    help="cancel every loanId in data/invested-loans.json")
+                    help="cancel every loanId in this account's invested-loans file")
+    pc.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
     pc.add_argument("--live", action="store_true", help="cancel for REAL (default: dry-run)")
     pc.add_argument("-v", "--verbose", action="store_true")
 
