@@ -1,0 +1,101 @@
+name: Setup i2i environment
+description: >-
+  Python + fully cached toolchain: the pip dependency cache, a cached virtualenv
+  (site-packages, so `pip install -e .[extras]` is a no-op on hit), and cached
+  Playwright Chromium (the ~150MB browser download — the historical 10-15 min
+  cold-start cost). System libs (playwright install-deps) are idempotent and
+  cheap once present.
+
+  The venv + browser caches are keyed on pyproject.toml + Python version +
+  extras, and shared ACROSS workflows AND ACROSS matrix jobs in the same run:
+  the first matrix job populates them, the rest hit them. Self-healing: if a
+  restored venv's interpreter drifted (runner image Python patch bumped), the
+  venv is recreated in place instead of failing.
+
+inputs:
+  extras:
+    description: pip extras to install, e.g. "browser,dev"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: pyproject.toml
+
+    - name: Cache Playwright Chromium
+      id: pw
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+        restore-keys: |
+          playwright-${{ runner.os }}-
+
+    - name: Cache Python virtualenv
+      id: venv
+      uses: actions/cache@v4
+      with:
+        path: .venv-ci
+        key: venv-${{ runner.os }}-py3.12-${{ inputs.extras }}-${{ hashFiles('pyproject.toml') }}
+        restore-keys: |
+          venv-${{ runner.os }}-py3.12-${{ inputs.extras }}-
+          venv-${{ runner.os }}-py3.12-
+
+    # Self-healing: the ubuntu-latest image bumps patch Python versions, which
+    # can orphan a cached venv's interpreter symlink, and a restore-key hit can
+    # bring a venv built with FEWER extras. Rebuild unless the venv is a 3.12
+    # interpreter AND every requested extra is importable — cache-hit status is
+    # only a hint.
+    - name: Ensure venv usable (recreate on interpreter drift / missing extras)
+      shell: bash
+      run: |
+        EXTRAS="${{ inputs.extras }}"
+        # map extras -> a package each must provide (import check)
+        MODULES=""
+        case ",$EXTRAS," in
+          *,browser,*) MODULES="$MODULES playwright" ;;
+        esac
+        case ",$EXTRAS," in
+          *,dev,*)     MODULES="$MODULES pytest" ;;
+        esac
+        OK=1
+        if [ ! -x .venv-ci/bin/python ]; then
+          OK=0
+        elif ! .venv-ci/bin/python -c "import sys; assert sys.version_info[:2] == (3, 12)" 2>/dev/null; then
+          OK=0
+        else
+          for m in $MODULES; do
+            if ! .venv-ci/bin/python -c "import $m" >/dev/null 2>&1; then
+              echo "venv missing extra module: $m"
+              OK=0
+              break
+            fi
+          done
+        fi
+        if [ "$OK" != "1" ]; then
+          echo "venv missing or incomplete — rebuilding"
+          rm -rf .venv-ci
+          python -m venv .venv-ci
+          .venv-ci/bin/python -m pip install --upgrade pip
+          .venv-ci/bin/python -m pip install -e ".[$EXTRAS]"
+        else
+          echo "venv cache hit (3.12 + all extras) — skipping pip install"
+        fi
+        .venv-ci/bin/python --version
+
+    - name: Install Playwright Chromium (browser download, cached)
+      if: steps.pw.outputs.cache-hit != 'true'
+      shell: bash
+      run: .venv-ci/bin/python -m playwright install chromium
+
+    # System libraries for headless Chromium. install-deps is idempotent: when
+    # already present it is a ~20-40s no-op, so it runs on every job (browser
+    # deps are NOT cacheable — each runner is ephemeral).
+    - name: Install Playwright system deps
+      shell: bash
+      run: .venv-ci/bin/python -m playwright install-deps chromium
