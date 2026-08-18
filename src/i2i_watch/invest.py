@@ -5,15 +5,17 @@ plain dicts so the money-safety logic unit-tests without a network.
 
 Loan LISTING is scraped by the EXISTING browser scraper (sources/i2i.py — the one
 endpoint that reliably blocks direct HTTP). Selection keeps rate STRICTLY ABOVE
-config.AUTOINVEST_MIN_RATE_PCT (150 => 0 candidates vs a ~46.7%-max market: safe
-no-op). Default is a DRY RUN that prints the plan and places nothing.
+config.AUTOINVEST_MIN_RATE_PCT (rate strictly > gate; default 100). Default is a
+DRY RUN that prints the plan and places nothing.
 
     python -m i2i_watch invest           # DRY RUN — prints plan, places nothing
     python -m i2i_watch invest --live     # REAL money — places investorNow orders
 
 Auth: I2I_EMAIL + I2I_PASSWORD (auto-login). --live also needs I2I_TXN_PIN.
 Any HTTP/response error mid-run STOPS (no further spending). Placed loanIds go to
-data/invested-loans.json (storage) so `cancel --all-invested` can reverse them.
+data/invested-loans.json (storage) so `cancel --all-invested` can reverse them and
+later runs exclude already-funded loans (dedup). A run deploys down the ranked
+list until the wallet is exhausted — no per-run cap beyond the wallet itself.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 
 from . import config as C
 from . import storage
@@ -78,16 +81,53 @@ def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT) -> li
     return sorted(out, key=lambda x: (x["rate"], x["score"], x["tenure"]), reverse=True)
 
 
-def size_amount(amt_left: float, wallet: float, run_left: float,
-                lo: float, hi: float, mult: float) -> float:
-    """min(max, PER_LOAN_CAP, amt_left, wallet, per-run remaining), floored to a
-    multiple of `mult` and to whole rupees; 0 if it can't reach the minimum."""
-    cap = min(hi, C.PER_LOAN_CAP, amt_left, wallet, run_left)
+def size_amount(amt_left: float, wallet: float, lo: float, hi: float, mult: float) -> float:
+    """min(platform max, PER_LOAN_CAP, amt_left, wallet), floored to a multiple of
+    `mult` and to whole rupees; 0 if it can't reach the minimum."""
+    cap = min(hi, C.PER_LOAN_CAP, amt_left, wallet)
     if cap < lo:
         return 0.0
     step = mult if mult and mult > 0 else 1.0
     amt = math.floor(math.floor(cap / step) * step)
     return float(amt) if amt >= lo else 0.0
+
+
+def exclude_invested(sel: list[dict], invested_ids: set[int]) -> list[dict]:
+    """Drop candidates already funded (data/invested-loans.json) so a later run
+    never re-attempts the same loan."""
+    return [s for s in sel if s["loanId"] is not None and int(s["loanId"]) not in invested_ids]
+
+
+def is_loan_maxed(text: str) -> bool:
+    t = str(text).lower()
+    return ("maximum up to" in t) or ("already invested" in t) or ("max" in t and "in this loan" in t)
+
+
+def is_low_balance(text: str) -> bool:
+    t = str(text).lower()
+    return ("escrow" in t and "balance" in t) or ("sufficient balance" in t) or ("available balance" in t)
+
+
+def parse_amount(text: str) -> float:
+    """First ₹/Rs amount in i2i's message -> float; 0 if none."""
+    m = re.search(r"(?:rs\.?|₹)\s*([\d,]+(?:\.\d+)?)", str(text), re.I)
+    if not m:
+        return 0.0
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return 0.0
+
+
+def parse_max_amount(text: str) -> float:
+    """Remaining 'maximum up to ₹X' a maxed loan can still take; 0 if none."""
+    m = re.search(r"max(?:imum)?\D{0,40}(?:rs\.?|₹)\s*([\d,]+(?:\.\d+)?)", str(text), re.I)
+    if not m:
+        return 0.0
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return 0.0
 
 
 def build_invest_payload(detail: dict, amount: float, rate: float) -> dict:
@@ -114,22 +154,22 @@ def build_invest_payload(detail: dict, amount: float, rate: float) -> dict:
 # ── orchestrator (thin — all I/O via the client) ────────────────────────────
 def _plan(client: I2iClient, sel: list[dict], wallet0: float) -> list[dict]:
     """Ordered plan; pulls per-loan detail to size + build the payload. Deducts
-    each amount from a running wallet + per-run budget; de-dupes within the run."""
+    each amount from a running wallet until it can't meet the minimum; de-dupes
+    within the run."""
     plan: list[dict] = []
     wallet = wallet0 - C.MIN_WALLET_BUFFER
-    run_left = C.PER_RUN_CAP
     seen: set[str] = set()
     for s in sel:
         lid = s["loanId"]
         if lid is None or str(lid) in seen:
             continue
-        if wallet < C.INVEST_MIN_AMOUNT or run_left < C.INVEST_MIN_AMOUNT:
+        if wallet < C.INVEST_MIN_AMOUNT:
             break
         d = client.loan_detail(s["borrowerUserId"], lid)
         lo = to_float(d.get("min_invest_loan_amount"), C.INVEST_MIN_AMOUNT)
         hi = to_float(d.get("max_invest_loan_amount"), C.INVEST_MAX_AMOUNT)
         mult = to_float(d.get("invest_multiple_value"), C.INVEST_MULTIPLE)
-        amt = size_amount(s["amtLeft"], wallet, run_left, lo, hi, mult)
+        amt = size_amount(s["amtLeft"], wallet, lo, hi, mult)
         if amt <= 0:
             continue
         try:  # UI-parity call the browser makes before investing (harmless)
@@ -146,7 +186,6 @@ def _plan(client: I2iClient, sel: list[dict], wallet0: float) -> list[dict]:
         })
         seen.add(str(lid))
         wallet -= amt
-        run_left -= amt
     return plan
 
 
@@ -183,27 +222,9 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
 
     placed, invested, skipped = [], 0.0, 0
     # A per-loan "you can invest maximum up to ₹X / already invested" rejection means
-    # THIS loan is maxed for this investor — skip it and keep going. Only genuinely
-    # dangerous errors (auth, network, unknown) abort the whole run.
-    def _is_loan_maxed(text: str) -> bool:
-        t = str(text).lower()
-        return ("maximum up to" in t) or ("already invested" in t) or ("max" in t and "in this loan" in t)
-
-    def _is_low_balance(text: str) -> bool:
-        t = str(text).lower()
-        return ("escrow" in t and "balance" in t) or ("sufficient balance" in t) or ("available balance" in t)
-
-    def _parse_available(text: str) -> float:
-        """Extract i2i's stated available escrow balance, e.g.
-        'Available Balance ... is Rs. 3000.00' -> 3000.0. 0 if not found."""
-        import re
-        m = re.search(r"(?:rs\.?|₹)\s*([\d,]+(?:\.\d+)?)", str(text), re.I)
-        if m:
-            try:
-                return float(m.group(1).replace(",", ""))
-            except ValueError:
-                return 0.0
-        return 0.0
+    # THIS loan is maxed for this investor — retry at the remaining ₹X if it clears
+    # the floor, else skip. Only genuinely dangerous errors (auth, network, unknown)
+    # abort the whole run.
 
     def _try_invest(payload: dict) -> tuple[bool, str, str]:
         """Returns (ok, message, error_body). Never raises."""
@@ -229,8 +250,8 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         # If it failed purely on low escrow balance, retry THIS loan with the
         # available amount only (rounded down to the invest multiple), if that
         # still meets the platform minimum. "Invest the remaining amount only."
-        if not ok and body and _is_low_balance(body):
-            avail = _parse_available(body)
+        if not ok and body and is_low_balance(body):
+            avail = parse_amount(body)
             reduced = math.floor(min(avail, p["amount"]) / C.INVEST_MULTIPLE) * C.INVEST_MULTIPLE \
                 if C.INVEST_MULTIPLE else min(avail, p["amount"])
             if reduced >= C.INVEST_MIN_AMOUNT and reduced < p["amount"]:
@@ -240,12 +261,23 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
                 p["amount"] = reduced
                 reduced_retry_used = True
                 ok, msg, body = _try_invest(p["payload"])
+        # Loan maxed for this investor: lend the remaining it can still take.
+        if not ok and ((body and is_loan_maxed(body)) or is_loan_maxed(msg)):
+            max_amt = parse_max_amount(body) or parse_max_amount(msg)
+            reduced = math.floor(min(max_amt, p["amount"]) / C.INVEST_MULTIPLE) * C.INVEST_MULTIPLE \
+                if C.INVEST_MULTIPLE else min(max_amt, p["amount"])
+            if max_amt > 0 and reduced >= C.INVEST_MIN_AMOUNT and reduced < p["amount"]:
+                log.warning("loan %s: maxed (Rs %.0f left) — retrying with Rs %.0f",
+                            p["loanId"], max_amt, reduced)
+                p["payload"]["amount"] = int(reduced)
+                p["amount"] = reduced
+                ok, msg, body = _try_invest(p["payload"])
         if not ok:
-            if body and _is_low_balance(body):
+            if body and is_low_balance(body):
                 low_balance_msg = str(body)[:200]
                 log.warning("LOW BALANCE on loan %s: %s — STOP placing, will notify", p["loanId"], low_balance_msg)
                 break
-            if (body and _is_loan_maxed(body)) or _is_loan_maxed(msg):
+            if (body and is_loan_maxed(body)) or is_loan_maxed(msg):
                 log.warning("SKIP loan %s: already maxed (%s) — continuing",
                             p["loanId"], str(body or msg)[:120])
                 skipped += 1
@@ -292,7 +324,10 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
             cs = "⚠ no credit score (ranked as 750)" if p.get("noCredit") else f"score {p['score']:.0f}"
             lines.append(f"• Loan {p['loanId']}: {p['rate']:.2f}% "
                          f"{cs} — Rs {p['amount']:,.0f}")
-        send_telegram_text("\n".join(lines))
+        try:
+            send_telegram_text("\n".join(lines))
+        except Exception:  # noqa: BLE001
+            log.warning("failed to send invest summary Telegram alert")
     else:
         print(f"placed nothing ({skipped} loan(s) skipped — already maxed for this investor)"
               if skipped else "placed nothing")
@@ -311,10 +346,11 @@ def run(live: bool = False) -> int:
         return 1
 
     sel = select(loans, gate)
+    sel = exclude_invested(sel, set(storage.load_invested()))
     if not sel:
-        # e.g. gate=150 vs a ~46.7%-max market -> 0 candidates, the safe no-op.
-        msg = (f"{len(loans)} open loans | {len(sel)} loans >{gate:.0f}%: 0 "
-               f"-> nothing to invest, exiting")
+        # gate above the market max, or every qualifying loan already funded
+        msg = (f"{len(loans)} open loans | {len(sel)} loans >{gate:.0f}% "
+               f"after dedup: 0 -> nothing to invest, exiting")
         log.info(msg)
         print(msg)
         return 0

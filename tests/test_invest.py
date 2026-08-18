@@ -5,8 +5,22 @@ from __future__ import annotations
 import base64
 import hashlib
 
+from unittest.mock import patch
+
+from i2i_watch import config as C
+from i2i_watch import invest as INV
 from i2i_watch.auth import encrypt_password
-from i2i_watch.invest import build_invest_payload, emi, select, size_amount
+from i2i_watch.invest import (
+    build_invest_payload,
+    emi,
+    exclude_invested,
+    is_loan_maxed,
+    is_low_balance,
+    parse_amount,
+    parse_max_amount,
+    select,
+    size_amount,
+)
 
 
 def _decrypt(b64: str, passphrase: str) -> bytes:
@@ -55,6 +69,21 @@ def test_select_strictly_above_gate():
     assert select(rows, 40.0) == []  # 40 is NOT > 40
 
 
+def test_autoinvest_gate_default_is_100():
+    # lock the real-money threshold: place only on loans STRICTLY > 100%
+    assert C.AUTOINVEST_MIN_RATE_PCT == 100.0
+
+
+def test_select_gate_100_keeps_only_above_100():
+    # >100% qualifies; exactly 100% and below do not (strict >)
+    rows = [
+        {"pl_bloan_id": 1, "pl_applicable_rate": "100.08", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "100.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 3, "pl_applicable_rate": "46.66", "bloan_cibil_score": 900, "pl_amt_left": "5000"},
+    ]
+    assert [s["loanId"] for s in select(rows, 100.0)] == [1]
+
+
 def test_select_no_credit_imputed_750():
     # equal rate: real 800 > no-credit(=750) > real 700
     rows = [
@@ -80,10 +109,24 @@ def test_select_tenure_breaks_rate_and_credit_tie():
 
 
 def test_size_caps_and_floors():
-    assert size_amount(9000, 3200, 25000, 1000, 5000, 1) == 3200
-    assert size_amount(500, 5000, 25000, 1000, 5000, 1) == 0
-    assert size_amount(9000, 9000, 25000, 1000, 5000, 1) == 5000   # PER_LOAN_CAP 5000
-    assert size_amount(9000, 3333, 25000, 1000, 5000, 100) == 3300  # multiple flooring
+    assert size_amount(9000, 3200, 1000, 5000, 1) == 3200
+    assert size_amount(500, 5000, 1000, 5000, 1) == 0
+    assert size_amount(9000, 9000, 1000, 5000, 1) == 5000   # PER_LOAN_CAP 5000
+    assert size_amount(9000, 3333, 1000, 5000, 100) == 3300  # multiple flooring
+
+
+def test_sizing_anchors_cap_5000_floor_1000():
+    # the sizing rule's two money anchors
+    assert C.PER_LOAN_CAP == 5000.0
+    assert C.INVEST_MIN_AMOUNT == 1000.0
+
+
+def test_size_lends_remaining_or_caps_at_5000():
+    # remaining > 5000 -> 5000; else lend the full remaining; < 1000 -> skip
+    assert size_amount(7000, 25000, 1000, 5000, 1) == 5000
+    assert size_amount(3000, 25000, 1000, 5000, 1) == 3000
+    assert size_amount(1000, 25000, 1000, 5000, 1) == 1000
+    assert size_amount(999, 25000, 1000, 5000, 1) == 0
 
 
 def test_build_invest_payload_replicates_har_fields():
@@ -119,3 +162,125 @@ def test_investorNow_no_retry_on_timeout_prevents_double_spend():
         except TimeoutError:
             pass
     assert called["browser"] is False  # never re-POSTed the money call
+
+
+# ── money-loop orchestration (fake client, no network) ───────────────────────
+
+
+class _Reject(Exception):
+    """Simulates an i2i HTTPError carrying a rejection body (client attaches .i2i_body)."""
+
+    def __init__(self, body: str):
+        self.i2i_body = body
+        super().__init__(body)
+
+
+class _FakeClient:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.invest_calls: list[dict] = []
+
+    def loan_detail(self, uid, lid):
+        return {
+            "pl_bloan_id": lid, "pl_user_id": uid, "bloan_tenure": 6,
+            "pl_current_rate": "100.08", "bname": "x", "bloan_i2i_category": "X",
+            "purpose": "x", "min_invest_loan_amount": 1000,
+            "max_invest_loan_amount": 5000, "invest_multiple_value": 1,
+        }
+
+    def principal_protection(self, *a):
+        return {}
+
+    def invest(self, payload):
+        self.invest_calls.append(dict(payload))
+        if not self._responses:
+            raise AssertionError("unexpected invest call")
+        resp = self._responses.pop(0)
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
+
+
+class _NoAuthClient:
+    @classmethod
+    def from_env(cls):
+        raise SystemExit("no auth (test)")
+
+
+def _sel():
+    return [{"loanId": 123, "borrowerUserId": 999, "rate": 100.08,
+             "score": 750.0, "noCredit": True, "tenure": 6.0, "amtLeft": 5000.0}]
+
+
+def test_exclude_invested_filters_ids():
+    sel = [{"loanId": 1}, {"loanId": 2}, {"loanId": 3}]
+    assert [s["loanId"] for s in exclude_invested(sel, {2})] == [1, 3]
+    assert exclude_invested(sel, set()) == sel
+
+
+def test_parse_amount_and_max_amount():
+    assert parse_amount("Available Balance is Rs. 3000.00") == 3000.0
+    assert parse_max_amount("you can invest maximum up to ₹2000.00") == 2000.0
+    assert parse_max_amount("already invested ₹3000 in this loan") == 0.0
+
+
+def test_message_classifiers():
+    assert is_loan_maxed("you can invest maximum up to ₹2000") is True
+    assert is_loan_maxed("already invested") is True
+    assert is_low_balance("Available Balance is Rs 100") is True
+    assert is_low_balance("you can invest maximum up to ₹2000") is False
+
+
+def test_plan_dedups_within_run():
+    plan = INV._plan(_FakeClient([]), _sel() + _sel(), 5000.0)
+    assert len(plan) == 1 and plan[0]["amount"] == 5000
+
+
+def test_place_retries_reduced_on_low_balance(monkeypatch):
+    c = _FakeClient([_Reject("Available Balance is Rs. 3000.00"),
+                     {"data": "Invested Successfully", "message": "Fund added successfully."}])
+    monkeypatch.setenv("I2I_TXN_PIN", "1234")
+    with patch.object(INV.storage, "record_invested"), patch.object(INV, "send_telegram_text"):
+        assert INV._place(c, [], _sel(), 5000.0, 100.0, True) == 0
+    assert [x["amount"] for x in c.invest_calls] == [5000, 3000]
+
+
+def test_place_retries_reduced_on_maxed(monkeypatch):
+    c = _FakeClient([{"message": "you can invest maximum up to ₹2000.00"},
+                     {"data": "Invested Successfully", "message": "Fund added successfully."}])
+    monkeypatch.setenv("I2I_TXN_PIN", "1234")
+    with patch.object(INV.storage, "record_invested"), patch.object(INV, "send_telegram_text"):
+        assert INV._place(c, [], _sel(), 5000.0, 100.0, True) == 0
+    assert [x["amount"] for x in c.invest_calls] == [5000, 2000]
+
+
+def test_place_skips_maxed_below_min(monkeypatch):
+    c = _FakeClient([{"message": "you can invest maximum up to ₹500.00"}])
+    monkeypatch.setenv("I2I_TXN_PIN", "1234")
+    with patch.object(INV.storage, "record_invested"), patch.object(INV, "send_telegram_text"):
+        assert INV._place(c, [], _sel(), 5000.0, 100.0, True) == 0
+    assert len(c.invest_calls) == 1  # below the 1000 floor -> skip, no retry
+
+
+def test_place_success_telegram_failure_returns_0(monkeypatch):
+    c = _FakeClient([{"data": "Invested Successfully", "message": "Fund added successfully."}])
+    monkeypatch.setenv("I2I_TXN_PIN", "1234")
+    with patch.object(INV.storage, "record_invested"), \
+         patch.object(INV, "send_telegram_text", side_effect=RuntimeError("tg down")):
+        assert INV._place(c, [], _sel(), 5000.0, 100.0, True) == 0
+
+
+def test_run_excludes_invested(monkeypatch, capsys):
+    import i2i_watch.sources.i2i as src
+
+    rows = [
+        {"pl_bloan_id": 1, "pl_user_id": 9, "pl_applicable_rate": "100.08",
+         "bloan_cibil_score": 700, "pl_amt_left": "5000", "bloan_tenure": 6},
+        {"pl_bloan_id": 2, "pl_user_id": 9, "pl_applicable_rate": "100.08",
+         "bloan_cibil_score": 700, "pl_amt_left": "5000", "bloan_tenure": 6},
+    ]
+    monkeypatch.setattr(src, "fetch_all_loans", lambda: rows)
+    monkeypatch.setattr(INV.storage, "load_invested", lambda: [1])
+    monkeypatch.setattr(INV, "I2iClient", _NoAuthClient)
+    assert INV.run(live=False) == 0
+    assert "1 loans >100%" in capsys.readouterr().out

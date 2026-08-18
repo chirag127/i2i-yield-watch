@@ -7,10 +7,10 @@ TWO DISTINCT rate gates — DO NOT CONFLATE (env var == config name, one each):
   name                    | default | meaning                       | operator
   ------------------------|---------|-------------------------------|---------
   NOTIFY_MIN_RATE_PCT     | 40      | ALERT (monitor pings you)     | rate >  this
-  AUTOINVEST_MIN_RATE_PCT | 150     | PLACE REAL MONEY              | rate >  this
+  AUTOINVEST_MIN_RATE_PCT | 100     | PLACE REAL MONEY              | rate >  this
 
-NOTIFY = free/read-only (Telegram/ntfy). AUTOINVEST = spends money; 150 is a
-safe no-op vs the ~46.7%-max market (0 candidates until lowered deliberately).
+NOTIFY = free/read-only (Telegram/ntfy). AUTOINVEST = spends money; 100 places
+money only on loans with rate STRICTLY > 100% (the user's chosen gate).
 
 HARD SAFETY RAILS (caps) are circuit breakers — real money moves through them.
 Each numeric is env-overridable so CI can tune without a code change.
@@ -31,11 +31,10 @@ def _f(env: str, default: float) -> float:
 
 # ── rate gates (two distinct thresholds — do NOT conflate; see table above) ──
 NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # ALERT gate (rate >)
-AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 150.0) # MONEY gate (rate >)
+AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 100.0) # MONEY gate (rate >)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────
 PER_LOAN_CAP: float = _f("PER_LOAN_CAP", 5000.0)             # never exceed per loan
-PER_RUN_CAP: float = _f("PER_RUN_CAP", 25000.0)              # max deployed per run (breaker)
 MIN_WALLET_BUFFER: float = _f("MIN_WALLET_BUFFER", 0.0)      # leave untouched
 INVEST_MIN_AMOUNT: float = _f("INVEST_MIN_AMOUNT", 1000.0)   # min per investment
 INVEST_MAX_AMOUNT: float = _f("INVEST_MAX_AMOUNT", 5000.0)   # platform max/loan

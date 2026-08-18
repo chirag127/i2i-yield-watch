@@ -16,7 +16,7 @@
 
 ⭐ **If this is useful, please star the repo — it helps others find it.**
 
-> **⚠️ Real-money capable.** The auto-investor places actual money on i2iFunding. It ships **safe-gated off**: dry-run by default (`invest` prints the plan and places nothing), and `AUTOINVEST_MIN_RATE_PCT=150` yields **zero candidates** against a ~46.7%-max market. Real placement needs `--live` **and** `I2I_TXN_PIN`; any mid-run error stops all further spending. Lower the gate deliberately, at your own risk.
+> **⚠️ Real-money capable.** The auto-investor places actual money on i2iFunding. It ships **safe-gated**: dry-run by default (`invest` prints the plan and places nothing), and `AUTOINVEST_MIN_RATE_PCT=100` places money only on loans with rate **strictly > 100%**. Real placement needs `--live` **and** `I2I_TXN_PIN`; any mid-run error stops all further spending. Lower the gate deliberately, at your own risk.
 
 > **🔒 No PII here.** This public repo holds tooling and anonymised aggregate stats only (avg rate, counts). Borrower names, PAN, CIBIL, escrow, and account records live in a **separate private** repo — never committed here.
 
@@ -104,8 +104,8 @@ Places (and reverses) investments via **direct HTTP** to the i2i API with **auto
 Modular split: `config.py` (all tunables), `auth.py` (AES login), `client.py` (all HTTP, one place), `invest.py` (pure select/rank/size/EMI + orchestrator), `cancel.py` (thin).
 
 - **Login:** POST `.../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Fresh `session_id` + `csrf_token` every run — token expiry is a non-issue.
-- **Select + rank:** loans with rate **strictly > `AUTOINVEST_MIN_RATE_PCT`** (default **150** — a safe no-op vs the ~46.7%-max market; lower it deliberately), ranked rate desc then `bloan_cibil_score` desc.
-- **Size:** `min(PER_LOAN_CAP, amtLeft, wallet, per-run remaining)`, floored to `invest_multiple_value` and whole rupees, skipped if `< INVEST_MIN_AMOUNT`. `PER_RUN_CAP` is a circuit breaker.
+- **Select + rank:** loans with rate **strictly > `AUTOINVEST_MIN_RATE_PCT`** (default **100**), ranked rate desc then `bloan_cibil_score` desc.
+- **Size:** `min(PER_LOAN_CAP, amtLeft, wallet)`, floored to `invest_multiple_value` and whole rupees, skipped if `< INVEST_MIN_AMOUNT`. A run keeps going down the ranked list until the wallet is exhausted (no per-run cap).
 - **Dry-run default** — prints the plan, places nothing. `--live` places for real (requires `I2I_TXN_PIN`). Any error mid-run STOPS.
 
 ```bash
@@ -125,9 +125,8 @@ CI: `.github/workflows/invest.yml` runs `invest --live` hourly in the IST daytim
 |----------|---------|-------------|
 | `I2I_STORAGE` | `json` | `json` (git-as-DB) or `firebase` (Firestore) |
 | `NOTIFY_MIN_RATE_PCT` | `40` | **Notify gate** — alert on loans with rate **>** this |
-| `AUTOINVEST_MIN_RATE_PCT` | `150` | **Auto-invest gate** — place real money only on rate **>** this (150 = safe no-op) |
+| `AUTOINVEST_MIN_RATE_PCT` | `100` | **Auto-invest gate** — place real money only on rate **>** this |
 | `PER_LOAN_CAP` | `5000` | Max ₹ placed in one loan |
-| `PER_RUN_CAP` | `25000` | Max ₹ deployed per run (circuit breaker) |
 | `INVEST_MIN_AMOUNT` | `1000` | Min ₹ per investment (skip below) |
 | `I2I_EMAIL` / `I2I_PASSWORD` | — | Login creds (password AES-encrypted client-side) |
 | `I2I_TXN_PIN` | — | Transaction PIN required to place/cancel (`--live`) |

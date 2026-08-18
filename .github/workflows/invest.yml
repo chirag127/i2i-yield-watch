@@ -13,9 +13,9 @@ name: i2i Auto-Invest (REAL MONEY)
 #   gh secret set I2I_TXN_PIN  --repo chirag127/i2i-yield-watch --body "<4-digit pin>"
 # TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID already exist on this repo (scraper uses them).
 #
-# The committed gate AUTOINVEST_MIN_RATE_PCT=150 (config.py) is a SAFE NO-OP on
-# the current market (max ~46.7%) — it places nothing until the gate is lowered
-# deliberately (set the repo variable AUTOINVEST_MIN_RATE_PCT to override).
+# The committed gate AUTOINVEST_MIN_RATE_PCT=100 (config.py) places money only on
+# loans with rate STRICTLY > 100%. Override via the repo variable
+# AUTOINVEST_MIN_RATE_PCT if you want a different threshold.
 
 on:
   schedule:
@@ -68,8 +68,8 @@ jobs:
           I2I_TXN_PIN: ${{ secrets.I2I_TXN_PIN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # gate stays 150 (config default, safe no-op); set repo var to override
-          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '150' }}
+          # gate >100% (config default); set repo var to override
+          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
         run: python -m i2i_watch invest --live -v
       - name: Commit invested-loans state (git-as-DB)
         run: |
