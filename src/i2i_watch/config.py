@@ -31,6 +31,7 @@ def _f(env: str, default: float) -> float:
 
 # ── rate gates (two distinct thresholds — do NOT conflate; see table above) ──
 NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # ALERT gate (rate >)
+NOTIFY_HIGH_RATE_PCT: float = _f("NOTIFY_HIGH_RATE_PCT", 100.0)       # LOUD alert gate (rate >)
 AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 100.0) # MONEY gate (rate >)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────

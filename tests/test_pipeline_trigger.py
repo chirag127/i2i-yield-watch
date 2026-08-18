@@ -116,6 +116,65 @@ def test_no_qualifying_no_send(json_backend, capture_notify):
     assert capture_notify == []
 
 
+def test_loud_tier_alerts_new_high_loan_even_when_standard_unchanged(
+        json_backend, capture_notify, monkeypatch):
+    """A NEW >100% loan fires the loud tier immediately even though the standard
+    qualifying set is identical (the exact 'no notifications' bug: unchanged set
+    + change-only logic = silence forever)."""
+    sent_loud = []
+
+    def fake_send_text(text, silent=False):
+        sent_loud.append(text)
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+
+    # First run: one >50% loan, no high loans -> standard notify only
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    assert capture_notify == [["1"]]
+    assert sent_loud == []
+
+    # Second run: loan 1 was already notified at 60% and is now 120% — the
+    # STANDARD set is unchanged ({1}), so change-only stays silent; but the
+    # LOUD tier sees it as new and fires. This is the loud tier's unique value.
+    pipeline.run(raw_rows=[_loan("1", 120)])
+    assert len(sent_loud) == 1
+    assert "1" in sent_loud[0] and "120" in sent_loud[0]
+    assert capture_notify == [["1"]]  # standard unchanged -> no standard re-send
+    # state records both tiers
+    st = storage.load_notify_state()
+    assert "1" in st.get("highIds", [])
+
+
+def test_loud_tier_does_not_respam_existing_high_loan(json_backend, capture_notify, monkeypatch):
+    """An already-alerted >100% loan stays silent on later runs (no every-run spam)."""
+    sent_loud = []
+
+    def fake_send_text(text, silent=False):
+        sent_loud.append(text)
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+    pipeline.run(raw_rows=[_loan("9", 120)])
+    pipeline.run(raw_rows=[_loan("9", 120)])  # same high loan again
+    assert len(sent_loud) == 1  # alerted only on the first appearance
+
+
+def test_loud_tier_high_gate_from_env(json_backend, capture_notify, monkeypatch):
+    monkeypatch.setenv("NOTIFY_HIGH_RATE_PCT", "150")
+    sent_loud = []
+
+    def fake_send_text(text, silent=False):
+        sent_loud.append(text)
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+    pipeline.run(raw_rows=[_loan("9", 120)])  # >100 but NOT >150 -> no loud
+    assert sent_loud == []
+    pipeline.run(raw_rows=[_loan("9", 160)])  # >150 -> loud
+    assert len(sent_loud) == 1
+
+
 def test_digest_helpers(monkeypatch):
     monkeypatch.delenv("I2I_DIGEST", raising=False)
     monkeypatch.setenv("I2I_DIGEST_HOURS", "6")

@@ -77,7 +77,8 @@ Set `I2I_STORAGE=firebase` to re-enable Firestore (requires `FIREBASE_SA_JSON` s
 
 Single Telegram bot `oriz127_bot`. Notify logic:
 
-- **NEW loans only** — a loan is announced once, the first time it appears AND its rate exceeds `NOTIFY_MIN_RATE_PCT` (default 40%). Loan IDs are persisted in `data/notify-state.json`; the set never re-notifies an already-seen ID.
+- **NEW loans only** — a loan is announced once, the first time it appears AND its rate exceeds `NOTIFY_MIN_RATE_PCT` (default 50%). Loan IDs are persisted in `data/notify-state.json`; the set never re-notifies an already-seen ID.
+- **LOUD tier** — any loan with rate **> `NOTIFY_HIGH_RATE_PCT`** (default 100) fires an immediate loud alert the moment it appears (or crosses the threshold), independent of the standard change-only tier — so a fresh >100% auto-invest candidate never goes unnoticed.
 - **Qualifying-set change** — if the set of loans above the threshold changes (any loan added or dropped), a summary fires.
 - **Periodic digest** — if `I2I_DIGEST_HOURS` is set, a full digest fires that often regardless of change.
 - `--reset-notify-state` flag (or the `reset_notify_state` workflow_dispatch input) clears the dedup state so all currently-qualifying loans re-announce once.
@@ -139,15 +140,21 @@ auth (refresh from a HAR when login is unavailable).
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `I2I_STORAGE` | `json` | `json` (git-as-DB) or `firebase` (Firestore) |
-| `NOTIFY_MIN_RATE_PCT` | `40` | **Notify gate** — alert on loans with rate **>** this |
+| `NOTIFY_MIN_RATE_PCT` | `50` | **Notify gate** — Telegram alert on loans with rate **>** this |
+| `NOTIFY_HIGH_RATE_PCT` | `100` | **LOUD alert gate** — fires the moment a loan exceeds this (auto-invest candidate), even if the standard set is unchanged |
+| `I2I_DIGEST_HOURS` | unset | Re-send the qualifying set every N hours even when unchanged (so a stable market never goes silent) |
 | `AUTOINVEST_MIN_RATE_PCT` | `100` | **Auto-invest gate** — place real money only on rate **>** this |
 | `PER_LOAN_CAP` | `5000` | Max ₹ placed in one loan |
 | `INVEST_MIN_AMOUNT` | `1000` | Min ₹ per investment (skip below) |
-| `I2I_EMAIL` / `I2I_PASSWORD` | — | Login creds (password AES-encrypted client-side) |
+| `I2I_EMAIL` / `I2I_PASSWORD` | — | Login creds (password AES-encrypted client-side) — **primary** auth (default account) |
+| `I2I_CSRF_TOKEN` / `I2I_SESSION_ID` | — | Session-token **fallback** auth (used only if login fails / no creds; expires) |
 | `I2I_TXN_PIN` | — | Transaction PIN required to place/cancel (`--live`) |
+| `I2I_ACCOUNTS` | `chirag` | Comma-separated portfolio account names |
+| `I2I_ACCOUNT` | first in `I2I_ACCOUNTS` | Account for this run (`--account` overrides) |
+| `I2I_NEERU_*` | — | Secondary-account envs: `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`, `I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT` (default 150)… |
 | `PRIORITY_HIGH_RATE_PCT` | `70` | Rate threshold for VERY_HIGH priority LABEL (display only) |
 | `PRIORITY_MEDIUM_RATE_PCT` | `50` | Rate threshold for MEDIUM priority LABEL (display only) |
-| `I2I_DIGEST_HOURS` | unset | Send full digest every N hours regardless of change |
+
 | `TELEGRAM_ENABLED` | `false` | Enable Telegram notifications |
 | `TELEGRAM_BOT_TOKEN` | — | Bot token for `oriz127_bot` |
 | `TELEGRAM_CHAT_ID` | — | Target chat/channel ID |

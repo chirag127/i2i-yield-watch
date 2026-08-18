@@ -32,7 +32,10 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Cold runners can take 10-15 min on Playwright install alone; 20m killed
+    # runs mid-install (observed 2026-08-18). 45m gives cold install + self-loop
+    # + git-crypt + tests comfortable headroom.
+    timeout-minutes: 45
     outputs:
       data_changed: ${{ steps.check.outputs.changed }}
 
@@ -78,7 +81,14 @@ jobs:
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           PRIORITY_HIGH_RATE_PCT: '70'
           PRIORITY_MEDIUM_RATE_PCT: '50'
-          NOTIFY_MIN_RATE_PCT: '40'
+          # TWO-TIER NOTIFICATION GATES (see config.py):
+          #   NOTIFY_MIN_RATE_PCT=50  -> standard Telegram alert (rate > 50%)
+          #   NOTIFY_HIGH_RATE_PCT=100 -> LOUD alert the moment a >100% loan posts
+          NOTIFY_MIN_RATE_PCT: '50'
+          NOTIFY_HIGH_RATE_PCT: '100'
+          # Periodic digest: even when the qualifying set is UNCHANGED, re-send
+          # every N hours so a stable market never goes silent forever.
+          I2I_DIGEST_HOURS: '6'
           STARTUP_JITTER_MS: '2000'
           # Self-loop: one run polls several times ~60s apart to approximate
           # 5-min cadence even when GitHub fires only every 15-30 min. Each
@@ -90,7 +100,13 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data
+          # OWNERSHIP PARTITION: scrape commits ONLY its own state files. The
+          # invested-loans*.json files belong to invest.yml — never stage them
+          # here, or concurrent invest runs collide on rebase/push (the two
+          # workflows must not interfere; see invest.yml).
+          git add data/active-loans.json data/notifications-sent.json \
+                  data/notify-state.json data/stats.json data/runs.json \
+                  data/archive data/index.html 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no data change"
           else

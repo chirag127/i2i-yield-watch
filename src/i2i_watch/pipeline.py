@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import config as C
 from . import storage
-from .notify.channels import notify_all, was_any_channel_successful
+from .notify.channels import notify_all, send_telegram_text, was_any_channel_successful
 from .sources.i2i import fetch_all_loans
 from .transform import transform_loans
 
@@ -23,6 +23,14 @@ def _rate_threshold() -> float:
     """NOTIFY gate: alert on loans with rate > this. config.NOTIFY_MIN_RATE_PCT
     (default 40), env-overridable via the SAME name NOTIFY_MIN_RATE_PCT."""
     return C._f("NOTIFY_MIN_RATE_PCT", C.NOTIFY_MIN_RATE_PCT)
+
+
+def _high_rate_threshold() -> float:
+    """LOUD tier gate: any loan with rate > this triggers an immediate loud
+    Telegram alert (default 100 = the auto-invest money gate), independent of
+    the standard change-only tier — the investor must know the moment a
+    >100% loan is live. config.NOTIFY_HIGH_RATE_PCT, env-overridable."""
+    return C._f("NOTIFY_HIGH_RATE_PCT", C.NOTIFY_HIGH_RATE_PCT)
 
 
 def _digest_hours() -> float:
@@ -85,6 +93,20 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     qual_ids = {str(ln["loanId"]) for ln in qualifying}
 
     prev_state = storage.load_notify_state()
+
+    # LOUD tier — rate > NOTIFY_HIGH_RATE_PCT (default 100). A brand-new loan in
+    # this tier fires an IMMEDIATE loud Telegram alert even when the standard
+    # qualifying set is unchanged, so the investor hears the moment a >100%
+    # loan posts. Tracked separately in notify-state['highIds'].
+    high_threshold = _high_rate_threshold()
+    high = [
+        ln for ln in active
+        if (ln.get("interestRate") is not None and ln["interestRate"] > high_threshold)
+    ]
+    high_ids = {str(ln["loanId"]) for ln in high}
+    prev_high_ids = {str(x) for x in prev_state.get("highIds", [])}
+    new_high_ids = high_ids - prev_high_ids
+
     prev_ids = {str(x) for x in prev_state.get("qualifyingIds", [])}
     new_ids = qual_ids - prev_ids
     dropped_ids = prev_ids - qual_ids
@@ -93,14 +115,34 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     digest_due = _digest_due(prev_state.get("notifiedAt"), digest_hours)
 
     log.info(
-        "qualifying (rate > %g%%): %d (new=%d dropped=%d) changed=%s digest_due=%s",
+        "qualifying (rate > %g%%): %d (new=%d dropped=%d) changed=%s digest_due=%s | "
+        "loud tier >%g%%: %d (new=%d)",
         threshold,
         len(qualifying),
         len(new_ids),
         len(dropped_ids),
         changed,
         digest_due,
+        high_threshold,
+        len(high),
+        len(new_high_ids),
     )
+
+    # ── LOUD tier alert (fires on new >100% loans regardless of standard tier) ──
+    high_sent = False
+    if new_high_ids:
+        high_to_send = [ln for ln in high if str(ln["loanId"]) in new_high_ids]
+        try:
+            lines = [f"🔔 <b>NEW LOAN &gt;{high_threshold:g}% — AUTO-INVEST CANDIDATE</b>"]
+            for ln in high_to_send:
+                url = ln.get("loanUrl") or ""
+                name = f'<a href="{url}">Loan {ln["loanId"]}</a>' if url else f'Loan {ln["loanId"]}'
+                lines.append(f"• {name}: {ln['interestRate']:.2f}% — ₹{ln.get('amountLeft','')}")
+            high_sent = send_telegram_text("\n".join(lines))  # loud by default
+            log.info("loud-tier alert: %d new loan(s) >%g%% -> %s",
+                     len(high_to_send), high_threshold, "sent" if high_sent else "FAILED")
+        except Exception as e:  # noqa: BLE001
+            log.warning("loud-tier alert failed: %s", e)
 
     results = {"telegram": False, "ntfy": False}
     should_notify = (changed and new_ids and qualifying) or (digest_due and qualifying)
@@ -168,18 +210,39 @@ def run(raw_rows: list[dict] | None = None) -> dict:
         "qualifyingLoans": len(qualifying),
         "newQualifyingLoans": len(new_ids),
         "droppedQualifyingLoans": len(dropped_ids),
+        "loudTierLoans": len(high),
+        "loudTierSent": high_sent,
         "rateThreshold": threshold,
+        "highRateThreshold": high_threshold,
         "errors": [],
         "notificationsSent": results,
     }
+    # Persist the loud tier's state so a re-posted >100% loan re-alerts, while a
+    # loan that is ALREADY in highIds stays silent (no re-spam every run). Runs
+    # AFTER the standard-tier saves (which don't know highIds) and merges the
+    # loud tier in without disturbing qualifyingIds/notifiedAt.
+    if high_ids or high_sent:
+        try:
+            cur = storage.load_notify_state()
+            if sorted(high_ids) != sorted(cur.get("highIds", [])):
+                storage.save_notify_state(
+                    sorted(qual_ids), notified_at=cur.get("notifiedAt"),
+                    high_ids=sorted(high_ids),
+                )
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not persist loud-tier state: %s", e)
+
     storage.append_changelog(summary)
     log.info(
-        "run complete: active=%d new=%d archived=%d qualifying=%d newQ=%d droppedQ=%d",
+        "run complete: active=%d new=%d archived=%d qualifying=%d newQ=%d droppedQ=%d "
+        "loud=%d loudSent=%s",
         len(active),
         len(new_loans),
         archived,
         len(qualifying),
         len(new_ids),
         len(dropped_ids),
+        len(high),
+        high_sent,
     )
     return summary

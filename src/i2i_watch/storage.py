@@ -357,12 +357,18 @@ def load_notify_state() -> dict:
     return doc.to_dict() if doc.exists else default
 
 
-def save_notify_state(qualifying_ids: list[str], notified_at: str | None = None) -> None:
+def save_notify_state(qualifying_ids: list[str], notified_at: str | None = None,
+                      high_ids: list[str] | None = None) -> None:
+    """Persist the notify snapshot. high_ids = loud-tier (rate > NOTIFY_HIGH
+    _RATE_PCT) loanIds — kept so a re-posted >100% loan re-alerts but an
+    already-alerted one stays silent."""
     init()
     payload = {
         "qualifyingIds": sorted({str(x) for x in qualifying_ids}),
         "notifiedAt": notified_at or _now_iso(),
     }
+    if high_ids is not None:
+        payload["highIds"] = sorted({str(x) for x in high_ids})
     if _mode == "json":
         _write_json("notify-state.json", {**payload, "updatedAt": payload["notifiedAt"]})
         return
