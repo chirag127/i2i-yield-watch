@@ -1,11 +1,16 @@
 name: i2i Auto-Invest (REAL MONEY)
 
 # Places REAL investments via `python -m i2i_watch invest --live --account <acct>`.
-# MULTI-ACCOUNT: a matrix runs one job per portfolio account (I2I_ACCOUNT selects
-# it). Each account has its OWN auth secrets (I2I_NEERU_* for the secondary
-# account; legacy I2I_* for the default chirag) and its OWN rate gate
-# (chirag >100%, neeru >110%) and its OWN data/invested-loans-<acct>.json
-# namespace — accounts never share dedup state.
+# TWO SEQUENTIAL JOBS (NOT a parallel matrix) so chirag ALWAYS gets first pick:
+#   job 1 invest-chirag — the primary account, evaluates and places first, then
+#                         commits its invested-loans state (git-as-DB).
+#   job 2 invest-neeru  — needs: invest-chirag, so it only starts AFTER chirag
+#                         has placed + pushed. Each account keeps its OWN auth
+#                         secrets (I2I_NEERU_* for the secondary account; legacy
+#                         I2I_* for the default chirag), its OWN rate gate
+#                         (both accounts >100% — chirag first, neeru fills what's
+#                         left) and its OWN data/invested-loans-<acct>.json
+#                         namespace — accounts never share dedup state.
 #
 # AUTH = auto-login FIRST: with EMAIL + PASSWORD set, each run logs in fresh
 # (client-side AES-encrypted password, passphrase kXyb3gzU) and gets new session
@@ -47,64 +52,48 @@ permissions:
   contents: write             # commit data/invested-loans*.json back (git-as-DB)
 
 jobs:
-  invest:
+  invest-chirag:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # JOB-level concurrency (NOT workflow-level): the matrix context is only
-    # available inside a job, so per-account groups auto-invest-chirag /
-    # auto-invest-neeru serialize their own repeated runs while letting the
-    # two accounts run in parallel (real money must never race itself).
+    # Real money must never race itself: repeated chirag runs serialize on this
+    # group while invest-neeru (below) waits for the whole job via `needs:`.
     concurrency:
-      group: auto-invest-${{ matrix.account }}
+      group: auto-invest-chirag
       cancel-in-progress: false
-    strategy:
-      fail-fast: false        # one account failing must not kill the other
-      matrix:
-        account: [chirag, neeru]
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      # Cached venv + Playwright Chromium, shared across the matrix: chirag
-      # (first job) populates the caches, neeru (second job) hits them.
       - name: Setup toolchain (cached venv + Playwright Chromium)
         uses: ./.github/actions/setup-i2i
         with:
           extras: browser
-      - name: Auto-invest (LIVE)
+      - name: Auto-invest (LIVE) — chirag (primary, first pick)
         env:
           PYTHONIOENCODING: utf-8
-          I2I_ACCOUNT: ${{ matrix.account }}
+          I2I_ACCOUNT: chirag
           # chirag (default account) — legacy unprefixed names
           I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
           I2I_PASSWORD: ${{ secrets.I2I_PASSWORD }}
           I2I_TXN_PIN: ${{ secrets.I2I_TXN_PIN }}
           I2I_CSRF_TOKEN: ${{ secrets.I2I_CSRF_TOKEN }}
           I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
-          # neeru (secondary account) — namespaced I2I_NEERU_* names
-          I2I_NEERU_EMAIL: ${{ secrets.I2I_NEERU_EMAIL }}
-          I2I_NEERU_PASSWORD: ${{ secrets.I2I_NEERU_PASSWORD }}
-          I2I_NEERU_TXN_PIN: ${{ secrets.I2I_NEERU_TXN_PIN }}
-          I2I_NEERU_CSRF_TOKEN: ${{ secrets.I2I_NEERU_CSRF_TOKEN }}
-          I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # per-account gates (config defaults chirag=100 / neeru=110; repo vars override)
           AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
-          I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '110' }}
-        run: .venv-ci/bin/python -m i2i_watch invest --live --account ${{ matrix.account }} -v
-      - name: Commit invested-loans state (git-as-DB)
+        run: .venv-ci/bin/python -m i2i_watch invest --live --account chirag -v
+      - name: Commit invested-loans state (git-as-DB) — chirag
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # OWNERSHIP PARTITION: invest.yml owns ONLY data/invested-loans*.json
           # (scrape.yml commits the rest of data/). The two workflows run on
           # different schedules and must never rebase/push the same files.
-          git add data/invested-loans*.json 2>/dev/null || true
+          git add data/invested-loans.json data/invested-loans-chirag.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no invest state change"
           else
-            git commit -m "data: i2i invested-loans ${{ matrix.account }} $(date -u +'%F %H:%MZ')"
+            git commit -m "data: i2i invested-loans chirag $(date -u +'%F %H:%MZ')"
             # Retry loop: concurrent scrape pushes can transiently reject ours —
             # rebase + retry up to 3x before giving up.
             for i in 1 2 3; do
@@ -123,7 +112,79 @@ jobs:
         run: |
           [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          MSG="⚠️ <b>i2i AUTO-INVEST run FAILED (${{ matrix.account }})</b> (real money)%0AA scheduled invest run errored — check it did not leave a half-placed order.%0A${RUN_URL}"
+          MSG="⚠️ <b>i2i AUTO-INVEST run FAILED (chirag)</b> (real money)%0AA scheduled invest run errored — check it did not leave a half-placed order.%0A${RUN_URL}"
+          curl -sS --max-time 20 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
+            && echo "failure alert sent" || echo "failure alert send failed"
+
+  invest-neeru:
+    needs: invest-chirag
+    # chirag fails -> neeru still runs (independent account/state, real money
+    # per account; fail-fast:false semantics preserved from the old matrix).
+    if: always() && needs.invest-chirag.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: auto-invest-neeru
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      # Cached venv + Playwright Chromium: invest-chirag populated the cache
+      # this run (or a prior one) — neeru hits it.
+      - name: Setup toolchain (cached venv + Playwright Chromium)
+        uses: ./.github/actions/setup-i2i
+        with:
+          extras: browser
+      - name: Auto-invest (LIVE) — neeru (secondary, fills after chirag)
+        env:
+          PYTHONIOENCODING: utf-8
+          I2I_ACCOUNT: neeru
+          # neeru (secondary account) — namespaced I2I_NEERU_* names
+          I2I_NEERU_EMAIL: ${{ secrets.I2I_NEERU_EMAIL }}
+          I2I_NEERU_PASSWORD: ${{ secrets.I2I_NEERU_PASSWORD }}
+          I2I_NEERU_TXN_PIN: ${{ secrets.I2I_NEERU_TXN_PIN }}
+          I2I_NEERU_CSRF_TOKEN: ${{ secrets.I2I_NEERU_CSRF_TOKEN }}
+          I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # same >100% gate as chirag (repo var overrides both accounts together)
+          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
+          I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '100' }}
+        run: .venv-ci/bin/python -m i2i_watch invest --live --account neeru -v
+      - name: Commit invested-loans state (git-as-DB) — neeru
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # OWNERSHIP PARTITION: invest.yml owns ONLY data/invested-loans*.json
+          # (scrape.yml commits the rest of data/). The two workflows run on
+          # different schedules and must never rebase/push the same files.
+          git add data/invested-loans-neeru.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "no invest state change"
+          else
+            git commit -m "data: i2i invested-loans neeru $(date -u +'%F %H:%MZ')"
+            # Retry loop: concurrent scrape pushes can transiently reject ours —
+            # rebase + retry up to 3x before giving up.
+            for i in 1 2 3; do
+              git pull --rebase --autostash origin main && git push && break
+              echo "push attempt $i failed, retrying..."
+              git rebase --abort 2>/dev/null || true
+              sleep 5
+            done
+          fi
+
+      - name: Alert on failure (real-money run must never fail silently)
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          MSG="⚠️ <b>i2i AUTO-INVEST run FAILED (neeru)</b> (real money)%0AA scheduled invest run errored — check it did not leave a half-placed order.%0A${RUN_URL}"
           curl -sS --max-time 20 -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \

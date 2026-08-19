@@ -127,11 +127,14 @@ uses `I2I_<ACCOUNT>_*` (e.g. `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`,
 `I2I_ACCOUNTS=chirag,neeru`. Adding a third account = add its name + env vars +
 a row in the `invest.yml` matrix.
 
-CI: `.github/workflows/invest.yml` runs a **matrix** — one `invest --live` job per
-account (chirag >100%, neeru >110%) in the IST daytime window. Requires per-account
-secrets `I2I_EMAIL`/`I2I_PASSWORD`/`I2I_TXN_PIN` (chirag) and `I2I_NEERU_*`
-(neeru) + `TELEGRAM_*` for the summary; CSRF/SESSION tokens are optional fallback
-auth (refresh from a HAR when login is unavailable).
+CI: `.github/workflows/invest.yml` runs **two sequential jobs in the IST daytime
+window — chirag always first** (`invest-chirag` places and commits, then
+`invest-neeru` starts via `needs:` and fills what's left), so the primary account
+gets first pick of every qualifying loan. Both accounts gate at **>100%**
+(chirag >100%, neeru >100%). Requires per-account secrets
+`I2I_EMAIL`/`I2I_PASSWORD`/`I2I_TXN_PIN` (chirag) and `I2I_NEERU_*` (neeru) +
+`TELEGRAM_*` for the summary; CSRF/SESSION tokens are optional fallback auth
+(refresh from a HAR when login is unavailable).
 
 ---
 
@@ -151,7 +154,7 @@ auth (refresh from a HAR when login is unavailable).
 | `I2I_TXN_PIN` | — | Transaction PIN required to place/cancel (`--live`) |
 | `I2I_ACCOUNTS` | `chirag` | Comma-separated portfolio account names |
 | `I2I_ACCOUNT` | first in `I2I_ACCOUNTS` | Account for this run (`--account` overrides) |
-| `I2I_NEERU_*` | — | Secondary-account envs: `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`, `I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT` (default 110)… |
+| `I2I_NEERU_*` | — | Secondary-account envs: `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`, `I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT` (default 100)… |
 | `PRIORITY_HIGH_RATE_PCT` | `70` | Rate threshold for VERY_HIGH priority LABEL (display only) |
 | `PRIORITY_MEDIUM_RATE_PCT` | `50` | Rate threshold for MEDIUM priority LABEL (display only) |
 
