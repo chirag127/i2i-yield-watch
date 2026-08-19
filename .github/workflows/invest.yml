@@ -93,7 +93,13 @@ jobs:
           # OWNERSHIP PARTITION: invest.yml owns ONLY data/invested-loans*.json
           # (scrape.yml commits the rest of data/). The two workflows run on
           # different schedules and must never rebase/push the same files.
-          git add data/invested-loans.json data/invested-loans-chirag.json 2>/dev/null || true
+          # GLOB (not explicit names): chirag is the DEFAULT account -> its
+          # record lives in the legacy data/invested-loans.json (no suffix),
+          # so an explicit "invested-loans-chirag.json" pathspec would NOT
+          # exist and git add would abort with exit 128, staging NOTHING —
+          # silently losing placed investments from git (observed 2026-08-19:
+          # 5 chirag loans placed but never committed).
+          git add data/invested-loans*.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no invest state change"
           else
@@ -166,7 +172,8 @@ jobs:
           # OWNERSHIP PARTITION: invest.yml owns ONLY data/invested-loans*.json
           # (scrape.yml commits the rest of data/). The two workflows run on
           # different schedules and must never rebase/push the same files.
-          git add data/invested-loans-neeru.json 2>/dev/null || true
+          # Glob like the chirag job (see its comment re: pathspec abort).
+          git add data/invested-loans*.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no invest state change"
           else
