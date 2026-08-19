@@ -49,10 +49,17 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup toolchain (cached venv + Playwright Chromium)
+      # NO browser install: the scraper now lists via direct HTTP (auto-login
+      # creds from secrets below — the same path invest.yml uses, proven as
+      # "listing via direct HTTP: N loans (no browser)"). Removing Playwright
+      # Chromium + the apt-get install-deps step makes the scraper faster AND
+      # immune to the flaky archive.ubuntu.com hangs that cancelled runs on
+      # 2026-08-19. sources/i2i.py keeps the browser scraper as a pure code
+      # fallback (raises cleanly if Playwright is absent and direct fails).
+      - name: Setup toolchain (cached venv, direct-HTTP only)
         uses: ./.github/actions/setup-i2i
         with:
-          extras: browser,dev
+          extras: dev
 
       - name: Run tests
         run: .venv-ci/bin/python -m pytest -q
@@ -72,6 +79,13 @@ jobs:
           # git-as-DB JSON backend only — Firestore free tier 429'd under the
           # self-loop and silently killed notifications. State lives in data/*.json.
           I2I_STORAGE: json
+          # Direct-HTTP listing auth (same secrets invest.yml uses) — without
+          # these the scraper fell back to the Playwright browser, whose
+          # apt-get install-deps is the flaky step that kept cancelling runs.
+          I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
+          I2I_PASSWORD: ${{ secrets.I2I_PASSWORD }}
+          I2I_CSRF_TOKEN: ${{ secrets.I2I_CSRF_TOKEN }}
+          I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
           # Config loaded from git-crypt-decrypted .env; secrets below override.
           TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
