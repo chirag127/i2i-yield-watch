@@ -4,7 +4,7 @@ name: i2i Auto-Invest (REAL MONEY)
 # MULTI-ACCOUNT: a matrix runs one job per portfolio account (I2I_ACCOUNT selects
 # it). Each account has its OWN auth secrets (I2I_NEERU_* for the secondary
 # account; legacy I2I_* for the default chirag) and its OWN rate gate
-# (chirag >100%, neeru >150%) and its OWN data/invested-loans-<acct>.json
+# (chirag >100%, neeru >110%) and its OWN data/invested-loans-<acct>.json
 # namespace — accounts never share dedup state.
 #
 # AUTH = auto-login FIRST: with EMAIL + PASSWORD set, each run logs in fresh
@@ -89,9 +89,9 @@ jobs:
           I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # per-account gates (config defaults chirag=100 / neeru=150; repo vars override)
+          # per-account gates (config defaults chirag=100 / neeru=110; repo vars override)
           AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
-          I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '150' }}
+          I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '110' }}
         run: .venv-ci/bin/python -m i2i_watch invest --live --account ${{ matrix.account }} -v
       - name: Commit invested-loans state (git-as-DB)
         run: |

@@ -51,8 +51,8 @@ def test_env_key_secondary_account_namespaced(monkeypatch):
 
 def test_get_float_per_account_gate(monkeypatch):
     monkeypatch.setenv("I2I_ACCOUNTS", "chirag,neeru")
-    monkeypatch.setenv("I2I_NEERU_AUTOINVEST_MIN_RATE_PCT", "150")
-    assert accounts.get_float("neeru", "AUTOINVEST_MIN_RATE_PCT", 100.0) == 150.0
+    monkeypatch.setenv("I2I_NEERU_AUTOINVEST_MIN_RATE_PCT", "110")
+    assert accounts.get_float("neeru", "AUTOINVEST_MIN_RATE_PCT", 100.0) == 110.0
     # chirag unaffected
     assert accounts.get_float("chirag", "AUTOINVEST_MIN_RATE_PCT", 100.0) == 100.0
 
