@@ -54,7 +54,11 @@ permissions:
 jobs:
   invest-chirag:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 45m headroom (scrape.yml's proven value): cold runners can spend 10-15 min
+    # on Playwright alone, and `playwright install-deps` (apt-get) has been
+    # observed hanging ~14 min on a flaky archive.ubuntu.com (2026-08-19); 15m
+    # cancelled a run mid-setup. Real placement steps are minutes, not this.
+    timeout-minutes: 45
     # Real money must never race itself: repeated chirag runs serialize on this
     # group while invest-neeru (below) waits for the whole job via `needs:`.
     concurrency:
@@ -124,7 +128,8 @@ jobs:
     # per account; fail-fast:false semantics preserved from the old matrix).
     if: always() && needs.invest-chirag.result != 'cancelled'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Same 45m headroom as invest-chirag (cold setup / apt flakiness).
+    timeout-minutes: 45
     concurrency:
       group: auto-invest-neeru
       cancel-in-progress: false
