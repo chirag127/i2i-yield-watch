@@ -109,17 +109,21 @@ runs:
     # already present it is a ~20-40s no-op, so it runs on every job (browser
     # deps are NOT cacheable — each runner is ephemeral).
     #
-    # RETRY: apt-get has been observed hanging ~14 min on a flaky
-    # archive.ubuntu.com (2026-08-19), cancelling a real-money invest run at its
-    # 15m timeout. Retry up to 3x with backoff before giving up.
+    # RETRY: apt-get has been observed HANGING (not failing) on a flaky
+    # archive.ubuntu.com (2026-08-19) — a hang would sit forever waiting for the
+    # job timeout, and a retry-on-error loop never fires because the exit code
+    # never arrives. So each attempt is BOUNDED with `timeout 240s`: a hung
+    # apt-get dies after 4 min, then the loop retries. 3 attempts = at most
+    # ~13 min in the worst case, well under the 45m job timeout.
     - name: Install Playwright system deps
       shell: bash
       run: |
         for i in 1 2 3; do
-          if .venv-ci/bin/python -m playwright install-deps chromium; then
+          echo "install-deps attempt $i/3 (bounded to 240s)..."
+          if timeout 240s .venv-ci/bin/python -m playwright install-deps chromium; then
             exit 0
           fi
-          echo "install-deps attempt $i failed, retrying in $((i*10))s..."
+          echo "attempt $i failed or timed out, retrying in $((i*10))s..."
           sleep $((i*10))
         done
         echo "install-deps failed after 3 attempts"
