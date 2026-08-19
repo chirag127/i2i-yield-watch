@@ -46,14 +46,17 @@ on:
 permissions:
   contents: write             # commit data/invested-loans*.json back (git-as-DB)
 
-concurrency:
-  group: auto-invest-${{ matrix.account }}
-  cancel-in-progress: false   # never race two real-money runs for the same account
-
 jobs:
   invest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # JOB-level concurrency (NOT workflow-level): the matrix context is only
+    # available inside a job, so per-account groups auto-invest-chirag /
+    # auto-invest-neeru serialize their own repeated runs while letting the
+    # two accounts run in parallel (real money must never race itself).
+    concurrency:
+      group: auto-invest-${{ matrix.account }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false        # one account failing must not kill the other
       matrix:
