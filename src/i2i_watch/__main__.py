@@ -6,6 +6,7 @@ approximates sub-hourly polling inside one GitHub Actions run.
 Subcommands:
   invest [--live]            place investments (dry-run unless --live)
   cancel <loanId>… [--live]  reverse fundings (dry-run unless --live)
+  wallet                     print the real investable escrow balance
 """
 
 from __future__ import annotations
@@ -37,6 +38,12 @@ def _cmd_topup(args) -> int:
     return topup_run(live=args.live, account=args.account)
 
 
+def _cmd_wallet(args) -> int:
+    from .invest import show_wallet
+
+    return show_wallet(account=args.account)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="i2i_watch", description="i2iFunding high-yield loan watch")
     p.add_argument("--iterations", type=int, default=1, help="self-loop count")
@@ -63,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--live", action="store_true", help="initiate the UPI/PayU payment request (default: dry-run)")
     pt.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
     pt.add_argument("-v", "--verbose", action="store_true")
+    pw = sub.add_parser("wallet", help="print the real investable escrow balance (availableWallet minus committed funds)")
+    pw.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
+    pw.add_argument("-v", "--verbose", action="store_true")
 
     args = p.parse_args(argv)
     configure_logging(getattr(args, "verbose", False))
@@ -73,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_cancel(args)
     if args.cmd == "topup":
         return _cmd_topup(args)
+    if args.cmd == "wallet":
+        return _cmd_wallet(args)
 
     # default: scrape/monitor loop
     if args.reset_notify_state:

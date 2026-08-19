@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from i2i_watch.client import I2iClient
+from i2i_watch.invest import show_wallet
 
 
 def _client(resp: object, funds_resp: object | None = None) -> I2iClient:
@@ -73,3 +74,22 @@ def test_wallet_falls_back_to_availableFunds_endpoint():
 def test_wallet_zero_when_everything_fails():
     c = _client({"data": {"noWalletHere": 1}})
     assert c.wallet() == pytest.approx(0.0)
+
+
+def test_show_wallet_prints_real_investable(monkeypatch, capsys):
+    # show_wallet uses the SAME wallet() the plan sizes against, so the CLI
+    # reflects the corrected (subtracted) balance, not the raw availableWallet
+    monkeypatch.setenv("I2I_ACCOUNT", "chirag")
+    monkeypatch.setenv("I2I_EMAIL", "a@b.com")
+    monkeypatch.setenv("I2I_PASSWORD", "pw")
+
+    class _Fake:
+        @classmethod
+        def from_env(cls, account=None):
+            c = I2iClient("c", "s")
+            c.wallet = lambda: 22000.0  # type: ignore[method-assign]
+            return c
+
+    monkeypatch.setattr("i2i_watch.invest.I2iClient", _Fake)
+    assert show_wallet("chirag") == 0
+    assert "investable escrow = Rs 22,000.00" in capsys.readouterr().out

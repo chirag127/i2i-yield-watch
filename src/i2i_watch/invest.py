@@ -382,3 +382,19 @@ def run(live: bool = False, account: str | None = None) -> int:
 
     wallet = client.wallet()
     return _place(client, loans, sel, wallet, gate, live, account=acct)
+
+
+def show_wallet(account: str | None = None) -> int:
+    """Print the account's REAL investable escrow balance (availableWallet
+    minus funds committed to open proposals/disbursals) and exit. This is the
+    exact number the plan sizes against — callable without waiting for a
+    qualifying loan so the wallet computation is verifiable on demand."""
+    acct = account or accounts.active_account()
+    try:
+        client = I2iClient.from_env(acct)
+    except SystemExit as e:  # no auth
+        log.error("%s", e)
+        return 1
+    wallet = client.wallet()
+    print(f"account={acct} investable escrow = Rs {wallet:,.2f}")
+    return 0
