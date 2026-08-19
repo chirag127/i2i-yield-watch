@@ -33,6 +33,10 @@ def _f(env: str, default: float) -> float:
 NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # ALERT gate (rate >)
 NOTIFY_HIGH_RATE_PCT: float = _f("NOTIFY_HIGH_RATE_PCT", 100.0)       # LOUD alert gate (rate >)
 AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 100.0) # MONEY gate (rate >)
+# Credit gate: skip loans with score BELOW this (score >= 750 qualifies).
+# Loans with NO credit score are IMPUTED as NO_CREDIT_IMPUTED_SCORE (750),
+# so they qualify — a missing bureau file is NOT treated as a 0 score.
+AUTOINVEST_MIN_CREDIT_SCORE: float = _f("AUTOINVEST_MIN_CREDIT_SCORE", 750.0)
 TOPUP_MIN_RATE_PCT: float = _f("TOPUP_MIN_RATE_PCT", 150.0)          # ADD-FUNDS trigger (rate >)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────

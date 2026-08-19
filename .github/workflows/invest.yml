@@ -92,7 +92,10 @@ jobs:
           I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # rate gate >100% + credit gate >=750 (no-score imputed 750 and
+          # passes; repo vars override both)
           AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
+          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '750' }}
         run: .venv-ci/bin/python -m i2i_watch invest --live --account chirag -v
       - name: Commit invested-loans state (git-as-DB) — chirag
         run: |
@@ -169,8 +172,10 @@ jobs:
           I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # same >100% gate as chirag (repo var overrides both accounts together)
+          # same >100% rate gate as chirag + same 750 credit gate (repo vars
+          # override both accounts together; no-score imputed 750 and passes)
           AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
+          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '750' }}
           I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '100' }}
         run: .venv-ci/bin/python -m i2i_watch invest --live --account neeru -v
       - name: Commit invested-loans state (git-as-DB) — neeru

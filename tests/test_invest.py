@@ -61,7 +61,42 @@ def test_select_filters_and_ranks():
         {"pl_bloan_id": 3, "pl_applicable_rate": "38.0", "bloan_cibil_score": 900, "pl_amt_left": "5000"},
         {"pl_bloan_id": 4, "pl_applicable_rate": "50.0", "bloan_cibil_score": 600, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 40.0)] == [4, 2, 1]  # 50; 46.66 by score desc; 38 dropped
+    # min_score=0: this test is about RATE filtering + ranking, not the credit gate
+    assert [s["loanId"] for s in select(rows, 40.0, min_score=0)] == [4, 2, 1]
+
+
+def test_select_credit_gate_filters_below_750():
+    # real scores below the 750 gate are never invested; 750 and above pass
+    rows = [
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 749, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
+    ]
+    assert [s["loanId"] for s in select(rows, 100.0)] == [4, 3]  # 700 + 749 dropped
+
+
+def test_select_credit_gate_no_credit_imputed_750_passes():
+    # a loan with NO credit score is imputed 750, which MEETS the gate -> kept
+    rows = [
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": "", "pl_amt_left": "5000"},
+        {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 0, "pl_amt_left": "5000"},
+    ]
+    sel = select(rows, 100.0)
+    assert [s["loanId"] for s in sel] == [1, 2, 3]
+    assert all(s["noCredit"] is True and s["score"] == 750.0 for s in sel)
+
+
+def test_select_credit_gate_configurable():
+    # the gate is a parameter, so it is tunable (e.g. per-account via
+    # AUTOINVEST_MIN_CREDIT_SCORE read in invest.run())
+    rows = [
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
+    ]
+    assert [s["loanId"] for s in select(rows, 100.0, min_score=800)] == [2]
+    assert [s["loanId"] for s in select(rows, 100.0, min_score=750)] == [2, 1]
 
 
 def test_select_strictly_above_gate():
@@ -81,7 +116,7 @@ def test_select_gate_100_keeps_only_above_100():
         {"pl_bloan_id": 2, "pl_applicable_rate": "100.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "46.66", "bloan_cibil_score": 900, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 100.0)] == [1]
+    assert [s["loanId"] for s in select(rows, 100.0, min_score=0)] == [1]
 
 
 def test_select_no_credit_imputed_750():
@@ -91,7 +126,8 @@ def test_select_no_credit_imputed_750():
         {"pl_bloan_id": 2, "pl_applicable_rate": "46.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "46.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    sel = select(rows, 40.0)
+    # min_score=0: this test is about the 750 IMPUTATION ranking, not the gate
+    sel = select(rows, 40.0, min_score=0)
     assert [s["loanId"] for s in sel] == [3, 2, 1]
     no_credit = next(s for s in sel if s["loanId"] == 2)
     assert no_credit["noCredit"] is True and no_credit["score"] == 750.0
@@ -105,7 +141,7 @@ def test_select_tenure_breaks_rate_and_credit_tie():
         {"pl_bloan_id": 2, "pl_applicable_rate": "46.0", "bloan_cibil_score": 700,
          "bloan_tenure": "24 Months", "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 40.0)] == [2, 1]
+    assert [s["loanId"] for s in select(rows, 40.0, min_score=0)] == [2, 1]
 
 
 def test_size_caps_and_floors():
@@ -275,9 +311,9 @@ def test_run_excludes_invested(monkeypatch, capsys):
 
     rows = [
         {"pl_bloan_id": 1, "pl_user_id": 9, "pl_applicable_rate": "100.08",
-         "bloan_cibil_score": 700, "pl_amt_left": "5000", "bloan_tenure": 6},
+         "bloan_cibil_score": 800, "pl_amt_left": "5000", "bloan_tenure": 6},
         {"pl_bloan_id": 2, "pl_user_id": 9, "pl_applicable_rate": "100.08",
-         "bloan_cibil_score": 700, "pl_amt_left": "5000", "bloan_tenure": 6},
+         "bloan_cibil_score": 800, "pl_amt_left": "5000", "bloan_tenure": 6},
     ]
     monkeypatch.setattr(src, "fetch_all_loans", lambda: rows)
     monkeypatch.setattr(INV.storage, "load_invested", lambda **kw: [1])

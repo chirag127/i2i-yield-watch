@@ -56,10 +56,14 @@ def _first(d: dict, keys: tuple[str, ...]) -> object | None:
     return None
 
 
-def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT) -> list[dict]:
-    """Raw rows -> candidates with rate STRICTLY > min_rate, ranked by importance:
-    rate desc, then credit score desc (no credit -> imputed 750), then tenure desc.
-    Field names per config (HAR-verified)."""
+def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT,
+           min_score: float = C.AUTOINVEST_MIN_CREDIT_SCORE) -> list[dict]:
+    """Raw rows -> candidates with rate STRICTLY > min_rate AND credit score
+    >= min_score, ranked by importance: rate desc, then credit score desc
+    (no credit -> imputed 750), then tenure desc. Field names per config
+    (HAR-verified). No-credit loans are imputed NO_CREDIT_IMPUTED_SCORE (750),
+    which meets the default min_score=750 gate — a missing bureau file is NOT
+    treated as a 0 and is NOT filtered out."""
     out = []
     for ln in loans:
         if not isinstance(ln, dict):
@@ -70,6 +74,8 @@ def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT) -> li
         raw_score = ln.get("bloan_cibil_score")
         no_credit = raw_score in (None, "") or to_float(raw_score) <= 0
         score = C.NO_CREDIT_IMPUTED_SCORE if no_credit else to_float(raw_score)
+        if score < min_score:
+            continue  # credit gate: below threshold -> never invest
         out.append({
             "loanId": _first(ln, C.LOAN_ID_FIELDS),
             "borrowerUserId": ln.get("pl_user_id"),
@@ -344,6 +350,9 @@ def run(live: bool = False, account: str | None = None) -> int:
     Returns a process rc."""
     acct = account or accounts.active_account()
     gate = accounts.get_float(acct, "AUTOINVEST_MIN_RATE_PCT", C.AUTOINVEST_MIN_RATE_PCT)
+    credit_gate = accounts.get_float(
+        acct, "AUTOINVEST_MIN_CREDIT_SCORE", C.AUTOINVEST_MIN_CREDIT_SCORE
+    )
 
     from .sources.i2i import fetch_all_loans
     try:
@@ -352,7 +361,7 @@ def run(live: bool = False, account: str | None = None) -> int:
         log.error("ERR scraping marketplace: %s — STOP, placed nothing", e)
         return 1
 
-    sel = select(loans, gate)
+    sel = select(loans, gate, credit_gate)
     sel = exclude_invested(sel, set(storage.load_invested(account=acct)))
     if not sel:
         # gate above the market max, or every qualifying loan already funded

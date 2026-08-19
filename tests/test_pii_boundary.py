@@ -40,7 +40,7 @@ def _raw_row_with_pii() -> dict:
         "em_self_profession": "2500", "emp_comp_name": "Confectionery",
         "location": "Jyotiba Phule Nagar", "residence_type": "own_house",
         "usr_age": "30", "usr_fname": "Hemraj", "usr_lname": "Singh",
-        "usr_cibil_score": "695", "bloan_cibil_score": "695",
+        "usr_cibil_score": "780", "bloan_cibil_score": "780",
         # PII the real feed carries — must never reach the output:
         "pan_card": "ABCDE1234F", "aadhar_card": "1234-5678-9012",
         "cibil_report": "https://x/cibil.pdf", "bank_statement": "https://x/stmt.pdf",
