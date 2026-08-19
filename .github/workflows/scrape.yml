@@ -76,7 +76,6 @@ jobs:
           TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS }}
           NTFY_ENABLED: ${{ secrets.NTFY_ENABLED }}
           NTFY_BASE_URL: ${{ secrets.NTFY_BASE_URL }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
