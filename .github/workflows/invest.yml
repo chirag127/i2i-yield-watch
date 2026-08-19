@@ -68,10 +68,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Setup toolchain (cached venv + Playwright Chromium)
+      # NO browser install: invest lists loans via direct HTTP (auto-login +
+      # paginated feed — the runner log confirms "listing via direct HTTP: N
+      # loans (no browser)"). Skipping the ~150MB Chromium download AND the
+      # apt-get install-deps step (the historical flaky/hanging step) makes
+      # the real-money path ~1-2 min faster per job and removes the #1
+      # cold-start failure mode. sources/i2i.py raises cleanly if direct HTTP
+      # ever fails and Playwright is absent (never mistakes an outage for an
+      # empty market).
+      - name: Setup toolchain (cached venv, direct-HTTP only)
         uses: ./.github/actions/setup-i2i
         with:
-          extras: browser
+          extras: ''
       - name: Auto-invest (LIVE) — chirag (primary, first pick)
         env:
           PYTHONIOENCODING: utf-8
@@ -143,12 +151,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      # Cached venv + Playwright Chromium: invest-chirag populated the cache
-      # this run (or a prior one) — neeru hits it.
-      - name: Setup toolchain (cached venv + Playwright Chromium)
+      # Cached venv (base install, no browser): invest-chirag populated the
+      # cache this run (or a prior one) — neeru hits it.
+      - name: Setup toolchain (cached venv, direct-HTTP only)
         uses: ./.github/actions/setup-i2i
         with:
-          extras: browser
+          extras: ''
       - name: Auto-invest (LIVE) — neeru (secondary, fills after chirag)
         env:
           PYTHONIOENCODING: utf-8

@@ -94,7 +94,13 @@ runs:
           rm -rf .venv-ci
           python -m venv .venv-ci
           .venv-ci/bin/python -m pip install --upgrade pip
-          .venv-ci/bin/python -m pip install -e ".[$EXTRAS]"
+          # Empty extras (invest.yml: direct-HTTP only, no browser) -> base
+          # install `-e .`; `-e .[]` would be invalid.
+          if [ -z "$EXTRAS" ]; then
+            .venv-ci/bin/python -m pip install -e .
+          else
+            .venv-ci/bin/python -m pip install -e ".[$EXTRAS]"
+          fi
         else
           echo "venv cache hit (3.12 + all extras) — skipping pip install"
         fi

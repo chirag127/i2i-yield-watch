@@ -126,7 +126,13 @@ def fetch_all_loans() -> list[dict]:
     FALLBACK (belt-and-suspenders): the Playwright XHR-interception scraper below,
     retried up to 3x. The direct path needs i2i creds (auto-login); with none, or
     on ANY direct failure (timeout/connection/HTTP), we drop straight to the
-    browser scraper — which needs no auth for the public listing."""
+    browser scraper — which needs no auth for the public listing.
+
+    The browser fallback is OPTIONAL: if Playwright isn't installed (invest.yml
+    runs direct-HTTP-only and deliberately skips the ~150MB browser + apt deps),
+    a direct failure raises instead of silently returning nothing — the real-money
+    path must never mistake a scrape outage for an empty market."""
+    direct_err: Exception | None = None
     try:
         from ..client import I2iClient
 
@@ -139,7 +145,21 @@ def fetch_all_loans() -> list[dict]:
     except SystemExit as e:  # no creds -> public browser scrape
         log.info("no i2i creds for direct listing (%s); browser fallback", e)
     except Exception as e:  # noqa: BLE001 — timeout/conn/HTTP -> browser fallback
+        direct_err = e
         log.warning("direct-HTTP listing failed (%s); browser fallback", str(e)[:120])
+
+    try:  # noqa: SIM105
+        import playwright.sync_api  # noqa: F401 — presence check only
+    except ImportError:
+        if direct_err is not None:
+            raise RuntimeError(
+                "direct-HTTP listing failed and Playwright is not installed "
+                f"(no browser fallback): {direct_err}"
+            ) from direct_err
+        raise RuntimeError(
+            "no i2i creds for direct listing and Playwright is not installed "
+            "(no browser fallback)"
+        )
 
     last_err: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
