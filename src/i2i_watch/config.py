@@ -7,10 +7,10 @@ TWO DISTINCT rate gates — DO NOT CONFLATE (env var == config name, one each):
   name                    | default | meaning                       | operator
   ------------------------|---------|-------------------------------|---------
   NOTIFY_MIN_RATE_PCT     | 40      | ALERT (monitor pings you)     | rate >  this
-  AUTOINVEST_MIN_RATE_PCT | 100     | PLACE REAL MONEY              | rate >  this
+  AUTOINVEST_MIN_RATE_PCT | 110     | PLACE REAL MONEY              | rate >  this
 
-NOTIFY = free/read-only (Telegram/ntfy). AUTOINVEST = spends money; 100 places
-money only on loans with rate STRICTLY > 100% (the user's chosen gate).
+NOTIFY = free/read-only (Telegram/ntfy). AUTOINVEST = spends money; 110 places
+money only on loans with rate STRICTLY > 110% (the user's chosen gate).
 
 HARD SAFETY RAILS (caps) are circuit breakers — real money moves through them.
 Each numeric is env-overridable so CI can tune without a code change.
@@ -32,11 +32,11 @@ def _f(env: str, default: float) -> float:
 # ── rate gates (two distinct thresholds — do NOT conflate; see table above) ──
 NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # ALERT gate (rate >)
 NOTIFY_HIGH_RATE_PCT: float = _f("NOTIFY_HIGH_RATE_PCT", 100.0)       # LOUD alert gate (rate >)
-AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 100.0) # MONEY gate (rate >)
-# Credit gate: skip loans with score BELOW this (score >= 750 qualifies).
+AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 110.0) # MONEY gate (rate >)
+# Credit gate: skip loans with score BELOW this (score >= 600 qualifies).
 # Loans with NO credit score are IMPUTED as NO_CREDIT_IMPUTED_SCORE (750),
 # so they qualify — a missing bureau file is NOT treated as a 0 score.
-AUTOINVEST_MIN_CREDIT_SCORE: float = _f("AUTOINVEST_MIN_CREDIT_SCORE", 750.0)
+AUTOINVEST_MIN_CREDIT_SCORE: float = _f("AUTOINVEST_MIN_CREDIT_SCORE", 600.0)
 TOPUP_MIN_RATE_PCT: float = _f("TOPUP_MIN_RATE_PCT", 150.0)          # ADD-FUNDS trigger (rate >)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────

@@ -65,25 +65,25 @@ def test_select_filters_and_ranks():
     assert [s["loanId"] for s in select(rows, 40.0, min_score=0)] == [4, 2, 1]
 
 
-def test_select_credit_gate_filters_below_750():
-    # real scores below the 750 gate are never invested; 750 and above pass
+def test_select_credit_gate_filters_below_600():
+    # real scores below the 600 gate are never invested; 600 and above pass
     rows = [
-        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
-        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 749, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 599, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 600, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
         {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 100.0)] == [4, 3]  # 700 + 749 dropped
+    assert [s["loanId"] for s in select(rows, 110.0)] == [4, 3, 2]  # 599 dropped
 
 
 def test_select_credit_gate_no_credit_imputed_750_passes():
-    # a loan with NO credit score is imputed 750, which MEETS the gate -> kept
+    # a loan with NO credit score is imputed 750, which MEETS the 600 gate -> kept
     rows = [
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": "", "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 0, "pl_amt_left": "5000"},
     ]
-    sel = select(rows, 100.0)
+    sel = select(rows, 110.0)
     assert [s["loanId"] for s in sel] == [1, 2, 3]
     assert all(s["noCredit"] is True and s["score"] == 750.0 for s in sel)
 
@@ -95,8 +95,8 @@ def test_select_credit_gate_configurable():
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 100.0, min_score=800)] == [2]
-    assert [s["loanId"] for s in select(rows, 100.0, min_score=750)] == [2, 1]
+    assert [s["loanId"] for s in select(rows, 110.0, min_score=800)] == [2]
+    assert [s["loanId"] for s in select(rows, 110.0, min_score=750)] == [2, 1]
 
 
 def test_select_strictly_above_gate():
@@ -104,19 +104,19 @@ def test_select_strictly_above_gate():
     assert select(rows, 40.0) == []  # 40 is NOT > 40
 
 
-def test_autoinvest_gate_default_is_100():
-    # lock the real-money threshold: place only on loans STRICTLY > 100%
-    assert C.AUTOINVEST_MIN_RATE_PCT == 100.0
+def test_autoinvest_gate_default_is_110():
+    # lock the real-money threshold: place only on loans STRICTLY > 110%
+    assert C.AUTOINVEST_MIN_RATE_PCT == 110.0
 
 
-def test_select_gate_100_keeps_only_above_100():
-    # >100% qualifies; exactly 100% and below do not (strict >)
+def test_select_gate_110_keeps_only_above_110():
+    # >110% qualifies; exactly 110% and below do not (strict >)
     rows = [
-        {"pl_bloan_id": 1, "pl_applicable_rate": "100.08", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
-        {"pl_bloan_id": 2, "pl_applicable_rate": "100.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 1, "pl_applicable_rate": "110.08", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "110.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "46.66", "bloan_cibil_score": 900, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 100.0, min_score=0)] == [1]
+    assert [s["loanId"] for s in select(rows, 110.0, min_score=0)] == [1]
 
 
 def test_select_no_credit_imputed_750():
@@ -310,13 +310,13 @@ def test_run_excludes_invested(monkeypatch, capsys):
     import i2i_watch.sources.i2i as src
 
     rows = [
-        {"pl_bloan_id": 1, "pl_user_id": 9, "pl_applicable_rate": "100.08",
+        {"pl_bloan_id": 1, "pl_user_id": 9, "pl_applicable_rate": "110.08",
          "bloan_cibil_score": 800, "pl_amt_left": "5000", "bloan_tenure": 6},
-        {"pl_bloan_id": 2, "pl_user_id": 9, "pl_applicable_rate": "100.08",
+        {"pl_bloan_id": 2, "pl_user_id": 9, "pl_applicable_rate": "110.08",
          "bloan_cibil_score": 800, "pl_amt_left": "5000", "bloan_tenure": 6},
     ]
     monkeypatch.setattr(src, "fetch_all_loans", lambda: rows)
     monkeypatch.setattr(INV.storage, "load_invested", lambda **kw: [1])
     monkeypatch.setattr(INV, "I2iClient", _NoAuthClient)
     assert INV.run(live=False) == 0
-    assert "1 loans >100%" in capsys.readouterr().out
+    assert "1 loans >110%" in capsys.readouterr().out
