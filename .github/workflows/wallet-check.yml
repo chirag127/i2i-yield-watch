@@ -1,0 +1,34 @@
+name: i2i Wallet Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  wallet-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        account: [chirag, neeru]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      # direct-HTTP only (same as invest.yml) — no browser, no apt-get
+      - name: Setup toolchain (cached venv)
+        uses: ./.github/actions/setup-i2i
+        with:
+          extras: ''
+      - name: Print investable escrow balance — ${{ matrix.account }}
+        env:
+          PYTHONIOENCODING: utf-8
+          I2I_ACCOUNT: ${{ matrix.account }}
+          I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
+          I2I_PASSWORD: ${{ secrets.I2I_PASSWORD }}
+          I2I_CSRF_TOKEN: ${{ secrets.I2I_CSRF_TOKEN }}
+          I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
+          I2I_NEERU_EMAIL: ${{ secrets.I2I_NEERU_EMAIL }}
+          I2I_NEERU_PASSWORD: ${{ secrets.I2I_NEERU_PASSWORD }}
+          I2I_NEERU_CSRF_TOKEN: ${{ secrets.I2I_NEERU_CSRF_TOKEN }}
+          I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
+        run: .venv-ci/bin/python -m i2i_watch wallet --account ${{ matrix.account }} -v
