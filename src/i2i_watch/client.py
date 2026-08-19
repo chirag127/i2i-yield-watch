@@ -244,6 +244,36 @@ class I2iClient:
         log.info("direct-HTTP listing: %d loans over %d page(s)", len(rows), pg)
         return rows
 
+    # ── add funds / top-up (initiates a payment the USER approves on-device) ──
+    def paytm_paynow(self, amount: float, pageurl: str = "investoraccount/overview") -> dict:
+        """POST apiv1.i2ifunding.com/paytm/paynow (multipart form) — Paytm
+        checkout initiation, HAR-verified from a live session: fields
+        TXN_AMOUNT / CHANNEL=WEB / pageurl. The SPA forwards the response's
+        order + checksum to secure.paytmpayments.com/theia/processTransaction,
+        where the operator picks UPI and approves the collect request. Money
+        moves only after that on-device approval. Non-idempotent: never retried."""
+        import httpx
+
+        url = self._url(C.API_BASE, "paytm/paynow")
+        form = {"TXN_AMOUNT": str(int(amount)), "CHANNEL": "WEB", "pageurl": pageurl}
+        # multipart: DROP Content-Type so httpx sets the boundary itself.
+        # browser_headers() hardcodes application/json — keeping it makes the
+        # server body-parser try JSON.parse() on the multipart body (400
+        # "Unexpected token - in JSON at position 0"). Live-verified.
+        headers = {k: v for k, v in browser_headers().items() if k != "Content-Type"}
+        r = httpx.post(url, files={k: (None, v) for k, v in form.items()},
+                       headers=headers, timeout=60, follow_redirects=False)
+        r.raise_for_status()
+        try:
+            return r.json()
+        except Exception:  # noqa: BLE001
+            return {"raw": r.text[:500]}
+
+    def nodal_account_detail(self) -> dict:
+        """GET apiv1.i2ifunding.com/investor/bank/escrowDetails — the nodal
+        account (NEFT/IMPS/RTGS) details shown on the escrow screen."""
+        return self._get(C.API_BASE, "investor/bank/escrowDetails")
+
     # ── writes (REAL MONEY) ────────────────────────────────────────────────────
     def invest(self, payload: dict) -> dict:
         """POST investor/investorNow/ (market host). payload carries transactionPin.

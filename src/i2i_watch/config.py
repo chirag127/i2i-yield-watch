@@ -33,6 +33,7 @@ def _f(env: str, default: float) -> float:
 NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # ALERT gate (rate >)
 NOTIFY_HIGH_RATE_PCT: float = _f("NOTIFY_HIGH_RATE_PCT", 100.0)       # LOUD alert gate (rate >)
 AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 100.0) # MONEY gate (rate >)
+TOPUP_MIN_RATE_PCT: float = _f("TOPUP_MIN_RATE_PCT", 150.0)          # ADD-FUNDS trigger (rate >)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────
 PER_LOAN_CAP: float = _f("PER_LOAN_CAP", 5000.0)             # never exceed per loan
@@ -40,6 +41,7 @@ MIN_WALLET_BUFFER: float = _f("MIN_WALLET_BUFFER", 0.0)      # leave untouched
 INVEST_MIN_AMOUNT: float = _f("INVEST_MIN_AMOUNT", 1000.0)   # min per investment
 INVEST_MAX_AMOUNT: float = _f("INVEST_MAX_AMOUNT", 5000.0)   # platform max/loan
 INVEST_MULTIPLE: float = _f("INVEST_MULTIPLE", 1.0)          # amount granularity
+TOPUP_MAX_AMOUNT: float = _f("TOPUP_MAX_AMOUNT", 25000.0)   # max per add-funds request
 
 # ── hosts / endpoints ───────────────────────────────────────────────────────
 OPEN_LOANS_HOST = "https://api.i2ifunding.com/api/v1"   # login, feed, wallet, investorNow
@@ -86,3 +88,4 @@ AES_PASSPHRASE = "kXyb3gzU"
 LOGIN_EMAIL_ENV = "I2I_EMAIL"          # plaintext email  (env / CI secret)
 LOGIN_PASSWORD_ENV = "I2I_PASSWORD"    # plaintext password (AES-encrypted before send)
 TXN_PIN_ENV = "I2I_TXN_PIN"            # transaction PIN — required for --live
+UPI_ID_ENV = "I2I_UPI_ID"              # UPI ID for add-money collect requests

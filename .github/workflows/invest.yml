@@ -34,7 +34,13 @@ on:
     # here because each run is IDEMPOTENT catch-up — it re-evaluates ALL eligible
     # loans and skips any already in this account's invested-loans file — so the
     # next tick automatically covers a missed one.
-    - cron: "2,12,22,32,42,52 4-13 * * *"
+    #
+    # OFFSET: scrape.yml fires at :03/:18/:33/:48 — invest starts at :06/:16/...
+    # so the two workflows NEVER start in the same minute (they used to be 1
+    # minute apart at :02/:03 and :32/:33, right in the push-collision window).
+    # The push retry loop below is the real fix; this offset shrinks how often
+    # it's needed.
+    - cron: "6,16,26,36,46,56 4-13 * * *"
   workflow_dispatch: {}
 
 permissions:

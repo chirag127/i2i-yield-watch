@@ -72,9 +72,24 @@ def _load_json(name: str, default):
 
 
 def _write_json(name: str, payload) -> None:
+    """Atomic write: temp file + os.replace, so a killed run (timeout, crash)
+    can never leave a truncated JSON (which the next run would misread and
+    re-fire duplicate notifications from). Same-directory tmp keeps the rename
+    atomic on POSIX and Windows."""
     f = _data_dir() / name
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp = f.with_name(f.name + ".tmp")
+    try:
+        tmp.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        os.replace(tmp, f)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:  # noqa: BLE001
+                pass
 
 
 def init():

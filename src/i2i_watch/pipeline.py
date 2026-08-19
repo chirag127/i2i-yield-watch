@@ -185,8 +185,13 @@ def run(raw_rows: list[dict] | None = None) -> dict:
             log.warning("no channel succeeded — notify-state NOT updated, will retry next run")
     elif qualifying:
         if changed and not new_ids:
-            # only drops changed the set — record new state, do NOT notify
-            storage.save_notify_state(sorted(qual_ids))
+            # only drops changed the set — record new state, do NOT notify.
+            # CRITICAL: preserve the previous notifiedAt — stamping now() here
+            # silently resets the digest clock WITHOUT sending any message, so
+            # a market where loans keep getting funded never fires a digest.
+            storage.save_notify_state(
+                sorted(qual_ids), notified_at=prev_state.get("notifiedAt")
+            )
             log.info("qualifying set shrank (drops only) — state updated, no notify")
         else:
             log.info(

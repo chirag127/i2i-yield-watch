@@ -8,9 +8,13 @@ on:
     # "Run scraper (self-looping)" step) to approximate 5-min polling even
     # when GitHub fires sparsely. GitHub cron is UTC.
     - cron: '3,18,33,48 * * * *'
-  push:
-    branches:
-      - main
+  # NO push trigger: every commit to main (invest.yml's invested-loans commits,
+  # scrape.yml's own data commits, dependabot merges) used to fire an immediate
+  # re-scrape — a self-triggering chain that made the effective interval ~0,
+  # queued runs behind each other in the concurrency group, and collided with
+  # invest.yml's real-money pushes. The schedule + workflow_dispatch above are
+  # the only triggers; the effective scrape interval is now exactly the cron
+  # cadence (15 min), and the deploy job still updates Pages after each run.
   workflow_dispatch:
     inputs:
       reset_notify_state:
@@ -111,8 +115,17 @@ jobs:
             echo "no data change"
           else
             git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')"
-            git pull --rebase --autostash origin main || git rebase --abort
-            git push || echo "push skipped (concurrent run won the race)"
+            # Retry loop (same as invest.yml): a concurrent invest push can
+            # transiently reject ours. A skipped push would silently drop the
+            # notify-state update on the ephemeral runner, and the next run
+            # would re-fire duplicate notifications from stale state — so
+            # retry until it lands.
+            for i in 1 2 3; do
+              git pull --rebase --autostash origin main && git push && break
+              echo "push attempt $i failed, retrying..."
+              git rebase --abort 2>/dev/null || true
+              sleep 5
+            done
           fi
 
       - name: Mark output

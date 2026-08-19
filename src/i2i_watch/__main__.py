@@ -1,11 +1,11 @@
-"""CLI: python -m i2i_watch [--iterations N] [--interval S] [-v] [--account NAME]
+"""CLI: python -m i2i_watch [--iterations N] [--interval S] [-v]
 
 Default (no subcommand): scrape/monitor loop. Self-loop (--iterations>1)
 approximates sub-hourly polling inside one GitHub Actions run.
 
 Subcommands:
-  invest [--live] [--account NAME]   place investments (dry-run unless --live)
-  cancel <loanId>… [--live]          reverse fundings (dry-run unless --live)
+  invest [--live]            place investments (dry-run unless --live)
+  cancel <loanId>… [--live]  reverse fundings (dry-run unless --live)
 """
 
 from __future__ import annotations
@@ -31,6 +31,12 @@ def _cmd_cancel(args) -> int:
                       all_invested=args.all_invested, account=args.account)
 
 
+def _cmd_topup(args) -> int:
+    from .topup import run as topup_run
+
+    return topup_run(live=args.live, account=args.account)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="i2i_watch", description="i2iFunding high-yield loan watch")
     p.add_argument("--iterations", type=int, default=1, help="self-loop count")
@@ -53,6 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
     pc.add_argument("--live", action="store_true", help="cancel for REAL (default: dry-run)")
     pc.add_argument("-v", "--verbose", action="store_true")
+    pt = sub.add_parser("topup", help="initiate escrow top-up for >TOPUP_MIN_RATE_PCT loans (dry-run unless --live)")
+    pt.add_argument("--live", action="store_true", help="initiate the UPI/PayU payment request (default: dry-run)")
+    pt.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
+    pt.add_argument("-v", "--verbose", action="store_true")
 
     args = p.parse_args(argv)
     configure_logging(getattr(args, "verbose", False))
@@ -61,12 +71,19 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_invest(args)
     if args.cmd == "cancel":
         return _cmd_cancel(args)
+    if args.cmd == "topup":
+        return _cmd_topup(args)
 
     # default: scrape/monitor loop
     if args.reset_notify_state:
         from . import storage
         storage.save_notify_state([], notified_at="1970-01-01T00:00:00Z")
-        log.info("notify-state RESET — next run re-announces all qualifying loans")
+        # FULL reset: also clear the ever-notified history so EVERY currently-
+        # qualifying loan re-announces once, not just ones not in the last
+        # notify-state snapshot. Without this, loans marked sent weeks ago stay
+        # silent forever even after --reset-notify-state.
+        storage._write_json("notifications-sent.json", [])
+        log.info("notify-state + notifications-sent RESET — next run re-announces all qualifying loans")
 
     rc = 0
     for i in range(1, args.iterations + 1):
