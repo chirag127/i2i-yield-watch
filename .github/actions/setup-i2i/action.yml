@@ -36,14 +36,16 @@ runs:
         restore-keys: |
           playwright-${{ runner.os }}-
 
+    # GitHub cache keys may NOT contain commas, but inputs.extras is a
+    # comma-separated list ("browser,dev") — sanitize it for the key.
     - name: Cache Python virtualenv
       id: venv
       uses: actions/cache@v4
       with:
         path: .venv-ci
-        key: venv-${{ runner.os }}-py3.12-${{ inputs.extras }}-${{ hashFiles('pyproject.toml') }}
+        key: venv-${{ runner.os }}-py3.12-${{ inputs.extras == '' && 'none' || replace(inputs.extras, ',', '-') }}-${{ hashFiles('pyproject.toml') }}
         restore-keys: |
-          venv-${{ runner.os }}-py3.12-${{ inputs.extras }}-
+          venv-${{ runner.os }}-py3.12-${{ inputs.extras == '' && 'none' || replace(inputs.extras, ',', '-') }}-
           venv-${{ runner.os }}-py3.12-
 
     # Self-healing: the ubuntu-latest image bumps patch Python versions, which
