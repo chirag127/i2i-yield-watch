@@ -37,15 +37,25 @@ runs:
           playwright-${{ runner.os }}-
 
     # GitHub cache keys may NOT contain commas, but inputs.extras is a
-    # comma-separated list ("browser,dev") — sanitize it for the key.
+    # comma-separated list ("browser,dev") — compute a comma-free slug in a
+    # shell step (GitHub expression functions have no replace()).
+    - name: Compute extras cache slug
+      id: slug
+      shell: bash
+      run: |
+        SLUG="${{ inputs.extras }}"
+        SLUG="${SLUG//,/-}"
+        [ -z "$SLUG" ] && SLUG="none"
+        echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+
     - name: Cache Python virtualenv
       id: venv
       uses: actions/cache@v4
       with:
         path: .venv-ci
-        key: venv-${{ runner.os }}-py3.12-${{ inputs.extras == '' && 'none' || replace(inputs.extras, ',', '-') }}-${{ hashFiles('pyproject.toml') }}
+        key: venv-${{ runner.os }}-py3.12-${{ steps.slug.outputs.slug }}-${{ hashFiles('pyproject.toml') }}
         restore-keys: |
-          venv-${{ runner.os }}-py3.12-${{ inputs.extras == '' && 'none' || replace(inputs.extras, ',', '-') }}-
+          venv-${{ runner.os }}-py3.12-${{ steps.slug.outputs.slug }}-
           venv-${{ runner.os }}-py3.12-
 
     # Self-healing: the ubuntu-latest image bumps patch Python versions, which
