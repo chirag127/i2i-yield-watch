@@ -1,6 +1,6 @@
 """Scorer: yield-score + strict multi-key sort ordering.
 
-Ranking importance: rate desc > credit desc (no-credit imputed 750) > tenure desc
+Ranking importance: rate desc > credit desc (no-credit imputed 625) > tenure desc
 > income desc > amount desc. Rate/return is always the top factor.
 """
 
@@ -13,19 +13,20 @@ from i2i_watch.scorer import (
 )
 
 
-def test_no_credit_imputed_as_750():
+def test_no_credit_imputed_as_625():
     with_credit = {"interestRate": 50, "creditScoreNumeric": 800}
     no_credit = {"interestRate": 50, "creditScoreNumeric": None}
-    # no-credit is ranked AS IF the score were 750 — neither favored nor buried
-    assert imputed_credit(no_credit) == 750.0
+    # no-credit is ranked AS IF the score were 625 — the 600-650 "High Risk /
+    # High Uncertainty" band; NOT favored (real 700+ outranks it)
+    assert imputed_credit(no_credit) == 625.0
     assert imputed_credit(with_credit) == 800.0
     assert has_no_credit(no_credit) is True
     assert has_no_credit(with_credit) is False
-    # a real 800 outscores an imputed 750 at equal rate
+    # a real 800 outscores the imputed-625 no-credit loan at equal rate
     assert calculate_yield_score(no_credit) < calculate_yield_score(with_credit)
-    # a real 700 scores BELOW the imputed-750 no-credit loan (not favored, not buried)
+    # a real 700 now scores ABOVE the imputed-625 no-credit loan (high risk)
     worse_credit = {"interestRate": 50, "creditScoreNumeric": 700}
-    assert calculate_yield_score(no_credit) > calculate_yield_score(worse_credit)
+    assert calculate_yield_score(no_credit) < calculate_yield_score(worse_credit)
 
 
 def test_higher_rate_scores_higher():
@@ -66,13 +67,13 @@ def test_sort_tiebreak_credit_then_tenure_then_income_then_amount():
     ]
     assert [ln["loanId"] for ln in sort_loans(loans)] == ["hiCredit", "loCredit"]
 
-    # equal rate: real 850 beats no-credit(=750); no-credit(=750) beats real 700
+    # equal rate: real 850 > real 700 > no-credit(=625 high risk)
     loans2 = [
         {"loanId": "real850", "interestRate": same, "creditScoreNumeric": 850},
         {"loanId": "noCredit", "interestRate": same, "creditScoreNumeric": None},
         {"loanId": "real700", "interestRate": same, "creditScoreNumeric": 700},
     ]
-    assert [ln["loanId"] for ln in sort_loans(loans2)] == ["real850", "noCredit", "real700"]
+    assert [ln["loanId"] for ln in sort_loans(loans2)] == ["real850", "real700", "noCredit"]
 
     # equal rate + credit -> longer tenure wins
     loans3 = [

@@ -6,8 +6,8 @@ Ranking importance (both notify sort and auto-invest select):
   2. CREDIT SCORE of the borrower.
   3. TENURE — longer locks the high rate in longer (minor factor).
 A borrower with NO credit score is IMPUTED as config.NO_CREDIT_IMPUTED_SCORE
-(750) for ranking — neither favored nor buried — and is flagged "no credit
-score" in the notification (see transform.format_loan_block).
+(625 — the 600-650 "High Risk / High Uncertainty" band) for ranking, and is
+flagged "no credit score" in the notification (see transform.format_loan_block).
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ WEIGHTS = {
 
 def imputed_credit(loan: dict) -> float:
     """Borrower credit score for RANKING: the real 300-900 score, or the imputed
-    NO_CREDIT_IMPUTED_SCORE (750) when there is no score."""
+    NO_CREDIT_IMPUTED_SCORE (625, high-risk band) when there is no score."""
     s = loan.get("creditScoreNumeric")
     if s is None or s != s:
         return C.NO_CREDIT_IMPUTED_SCORE
@@ -65,7 +65,7 @@ def normalize(value: float | None, lo: float, hi: float) -> float:
 
 
 def calculate_yield_score(loan: dict) -> float:
-    """0..100 opportunity score, 2dp. No-credit -> imputed 750 (never buried)."""
+    """0..100 opportunity score, 2dp. No-credit -> imputed 625 (high-risk)."""
     rate_n = normalize(loan.get("interestRate"), *BOUNDS["interest_rate"])
     credit_n = normalize(imputed_credit(loan), *BOUNDS["credit_score"])
     income_n = normalize(loan.get("monthlyIncome"), *BOUNDS["monthly_income"])
@@ -108,7 +108,7 @@ def _num(v: object) -> float:
 
 
 def sort_loans(loans: list[dict]) -> list[dict]:
-    """New list sorted by importance: rate desc, credit desc (no-credit=750),
+    """New list sorted by importance: rate desc, credit desc (no-credit=625),
     tenure desc, then income/amount. Funding-remaining is NOT a sort key."""
     return sorted(
         loans,

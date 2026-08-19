@@ -11,7 +11,7 @@ def _sel(*items):
     out = []
     for i, (rate, left) in enumerate(items):
         out.append({"loanId": i + 1, "rate": rate, "amtLeft": left,
-                    "borrowerUserId": 9, "score": 750.0, "noCredit": True,
+                    "borrowerUserId": 9, "score": 625.0, "noCredit": True,
                     "tenure": 6.0})
     return out
 

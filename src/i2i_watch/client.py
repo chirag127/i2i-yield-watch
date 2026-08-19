@@ -161,22 +161,35 @@ class I2iClient:
 
     # ── reads ────────────────────────────────────────────────────────────────
     def wallet(self) -> float:
-        """Investable balance (Rs). i2i's investorNow validates against the ESCROW
-        account balance, NOT data.availableWallet — so prefer an escrow/investable
-        field when present (availableEscrow / escrowBalance / availableForInvestment),
-        falling back to availableWallet, then availableFunds. Logs the raw keys once
-        so the exact field is discoverable from run logs."""
+        """Investable escrow balance (Rs). i2i's investorNow validates against the
+        ESCROW account balance, NOT data.availableWallet alone. Live capture showed
+        the SPA reports "Available Balance = Current − Funds Under Proposal/Disbursal"
+        (availableWallet ₹50,000 but only ~₹21k actually investable — the rest was
+        committed to open proposals). So the investable value is:
+
+            availableWallet − fundUnderProposal − disbursalPending
+
+        computed when availableWallet is present; an explicit escrow/investable
+        field (availableEscrow / escrowBalance / availableForInvestment) wins if
+        present; falls back to availableWallet alone, then availableFunds. Logs
+        the raw keys once so the exact field set is discoverable from run logs."""
         try:
             d = self._get(C.OPEN_LOANS_HOST, "investor/walletAndFund", timeout=30)
             data = d.get("data", {}) if isinstance(d, dict) else {}
             if isinstance(data, dict):
                 log.info("walletAndFund fields: %s", sorted(data.keys()))
-                for k in ("availableEscrow", "escrowBalance", "availableForInvestment",
-                          "escrowAmount", "availableFund", "availableWallet"):
+                for k in ("availableEscrow", "escrowBalance", "availableForInvestment"):
                     if data.get(k) is not None:
                         val = to_float(data.get(k))
                         log.info("wallet(): using %s = Rs %.2f", k, val)
                         return val
+                if data.get("availableWallet") is not None:
+                    committed = (to_float(data.get("fundUnderProposal"))
+                                 + to_float(data.get("disbursalPending")))
+                    investable = max(0.0, to_float(data.get("availableWallet")) - committed)
+                    log.info("wallet(): availableWallet %.2f − committed %.2f = Rs %.2f",
+                             to_float(data.get("availableWallet")), committed, investable)
+                    return investable
         except Exception:  # noqa: BLE001
             pass
         try:

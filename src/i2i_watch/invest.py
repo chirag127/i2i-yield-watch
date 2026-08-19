@@ -60,10 +60,11 @@ def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT,
            min_score: float = C.AUTOINVEST_MIN_CREDIT_SCORE) -> list[dict]:
     """Raw rows -> candidates with rate STRICTLY > min_rate AND credit score
     >= min_score, ranked by importance: rate desc, then credit score desc
-    (no credit -> imputed 750), then tenure desc. Field names per config
-    (HAR-verified). No-credit loans are imputed NO_CREDIT_IMPUTED_SCORE (750),
-    which meets the default min_score=750 gate — a missing bureau file is NOT
-    treated as a 0 and is NOT filtered out."""
+    (no credit -> imputed 625, the high-risk band), then tenure desc. Field
+    names per config (HAR-verified). No-credit loans are imputed
+    NO_CREDIT_IMPUTED_SCORE (625), which meets the default min_score=600 gate
+    — a missing bureau file is NOT treated as a 0 and is NOT filtered out, but
+    ranks as High Risk / High Uncertainty."""
     out = []
     for ln in loans:
         if not isinstance(ln, dict):
@@ -215,7 +216,7 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
     total = sum(p["amount"] for p in plan)
     print(f"\nPLAN ({'LIVE' if live else 'DRY RUN'}): {len(plan)} loan(s), Rs {total:,.0f} total")
     for p in plan:
-        cs = "no-credit→750" if p.get("noCredit") else f"score {p['score']:.0f}"
+        cs = "no-credit→625" if p.get("noCredit") else f"score {p['score']:.0f}"
         print(f"  Loan {p['loanId']}: {p['rate']:.2f}% {cs} -> Rs {p['amount']:,.0f}")
 
     if not live:
@@ -331,7 +332,7 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         lines = [f"\U0001f4b8 <b>i2i auto-invest{acct_label}: Rs {invested:,.0f} across "
                  f"{len(placed)} loan(s)</b> (&gt;{gate:.0f}%)"]
         for p in placed:
-            cs = "⚠ no credit score (ranked as 750)" if p.get("noCredit") else f"score {p['score']:.0f}"
+            cs = "⚠ no credit score (high risk)" if p.get("noCredit") else f"score {p['score']:.0f}"
             lines.append(f"• Loan {p['loanId']}: {p['rate']:.2f}% "
                          f"{cs} — Rs {p['amount']:,.0f}")
         try:
