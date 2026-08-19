@@ -29,6 +29,7 @@ runs:
 
     - name: Cache Playwright Chromium
       id: pw
+      if: contains(inputs.extras, 'browser')
       uses: actions/cache@v4
       with:
         path: ~/.cache/ms-playwright
@@ -106,14 +107,20 @@ runs:
         fi
         .venv-ci/bin/python --version
 
+    # Playwright Chromium + system deps ONLY when the browser extra is present
+    # (scrape.yml was the only consumer; invest.yml and now scrape.yml list via
+    # direct HTTP). Previously these two steps ran UNCONDITIONALLY, so a
+    # non-browser job still ran `playwright install-deps` (apt-get) — the flaky
+    # archive.ubuntu.com step that kept timing out and cancelling runs
+    # (observed 2026-08-19, 3/3 attempts timing out at 240s each).
     - name: Install Playwright Chromium (browser download, cached)
-      if: steps.pw.outputs.cache-hit != 'true'
+      if: contains(inputs.extras, 'browser') && steps.pw.outputs.cache-hit != 'true'
       shell: bash
       run: .venv-ci/bin/python -m playwright install chromium
 
     # System libraries for headless Chromium. install-deps is idempotent: when
-    # already present it is a ~20-40s no-op, so it runs on every job (browser
-    # deps are NOT cacheable — each runner is ephemeral).
+    # already present it is a ~20-40s no-op, so it runs on every browser job
+    # (browser deps are NOT cacheable — each runner is ephemeral).
     #
     # RETRY: apt-get has been observed HANGING (not failing) on a flaky
     # archive.ubuntu.com (2026-08-19) — a hang would sit forever waiting for the
@@ -122,6 +129,7 @@ runs:
     # apt-get dies after 4 min, then the loop retries. 3 attempts = at most
     # ~13 min in the worst case, well under the 45m job timeout.
     - name: Install Playwright system deps
+      if: contains(inputs.extras, 'browser')
       shell: bash
       run: |
         for i in 1 2 3; do
