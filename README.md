@@ -77,7 +77,7 @@ Set `I2I_STORAGE=firebase` to re-enable Firestore (requires `FIREBASE_SA_JSON` s
 
 Single Telegram bot `oriz127_bot`. Notify logic:
 
-- **NEW loans only** — a loan is announced once, the first time it appears AND its rate exceeds `NOTIFY_MIN_RATE_PCT` (default 50%). Loan IDs are persisted in `data/notify-state.json`; the set never re-notifies an already-seen ID.
+- **NEW loans only** — a loan is announced once, the first time it appears AND its rate exceeds `NOTIFY_MIN_RATE_PCT` (default 40%). Loan IDs are persisted in `data/notify-state.json`; the set never re-notifies an already-seen ID.
 - **LOUD tier** — any loan with rate **> `NOTIFY_HIGH_RATE_PCT`** (default 100) fires an immediate loud alert the moment it appears (or crosses the threshold), independent of the standard change-only tier — so a fresh >100% auto-invest candidate never goes unnoticed.
 - **Qualifying-set change** — if the set of loans above the threshold changes (any loan added or dropped), a summary fires.
 - **Periodic digest** — if `I2I_DIGEST_HOURS` is set, a full digest fires that often regardless of change.
@@ -155,7 +155,7 @@ gets first pick of every qualifying loan. Both accounts gate at **>100%**
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `I2I_STORAGE` | `json` | `json` (git-as-DB) or `firebase` (Firestore) |
-| `NOTIFY_MIN_RATE_PCT` | `50` | **Notify gate** — Telegram alert on loans with rate **>** this |
+| `NOTIFY_MIN_RATE_PCT` | `40` | **Notify gate** — Telegram alert on loans with rate **>** this |
 | `NOTIFY_HIGH_RATE_PCT` | `100` | **LOUD alert gate** — fires the moment a loan exceeds this (auto-invest candidate), even if the standard set is unchanged |
 | `I2I_DIGEST_HOURS` | unset | Re-send the qualifying set every N hours even when unchanged (so a stable market never goes silent) |
 | `AUTOINVEST_MIN_RATE_PCT` | `100` | **Auto-invest gate** — place real money only on rate **>** this |
