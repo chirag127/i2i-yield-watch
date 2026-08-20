@@ -65,20 +65,20 @@ def test_select_filters_and_ranks():
     assert [s["loanId"] for s in select(rows, 40.0, min_score=0)] == [4, 2, 1]
 
 
-def test_select_credit_gate_filters_below_600():
-    # real scores below the 600 gate are never invested; 600 and above pass
+def test_select_credit_gate_filters_below_700():
+    # real scores below the 700 gate are never invested; 700 and above pass
     rows = [
-        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 599, "pl_amt_left": "5000"},
-        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 600, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 699, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
         {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 110.0)] == [4, 3, 2]  # 599 dropped
+    assert [s["loanId"] for s in select(rows, 110.0)] == [4, 3, 2]  # 699 dropped
 
 
-def test_select_credit_gate_no_credit_imputed_625_passes():
-    # a loan with NO credit score is imputed 625 (high-risk band), which MEETS
-    # the 600 gate -> kept, but ranks as High Risk / High Uncertainty
+def test_select_credit_gate_no_credit_imputed_700_passes():
+    # a loan with NO credit score is imputed NO_CREDIT_IMPUTED_SCORE (700), which
+    # MEETS the 700 gate -> kept, but ranks below any real 750+ score
     rows = [
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": "", "pl_amt_left": "5000"},
@@ -86,7 +86,7 @@ def test_select_credit_gate_no_credit_imputed_625_passes():
     ]
     sel = select(rows, 110.0)
     assert [s["loanId"] for s in sel] == [1, 2, 3]
-    assert all(s["noCredit"] is True and s["score"] == 625.0 for s in sel)
+    assert all(s["noCredit"] is True and s["score"] == 700.0 for s in sel)
 
 
 def test_select_credit_gate_configurable():
@@ -120,18 +120,18 @@ def test_select_gate_110_keeps_only_above_110():
     assert [s["loanId"] for s in select(rows, 110.0, min_score=0)] == [1]
 
 
-def test_select_no_credit_imputed_625():
-    # equal rate: real 800 > real 700 > no-credit(=625 high risk)
+def test_select_no_credit_imputed_700():
+    # equal rate: real 800 > real 700 >= no-credit(=700 imputed high risk)
     rows = [
         {"pl_bloan_id": 1, "pl_applicable_rate": "46.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "46.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "46.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    # min_score=0: this test is about the 625 IMPUTATION ranking, not the gate
+    # min_score=0: this test is about the 700 IMPUTATION ranking, not the gate
     sel = select(rows, 40.0, min_score=0)
     assert [s["loanId"] for s in sel] == [3, 1, 2]
     no_credit = next(s for s in sel if s["loanId"] == 2)
-    assert no_credit["noCredit"] is True and no_credit["score"] == 625.0
+    assert no_credit["noCredit"] is True and no_credit["score"] == 700.0
 
 
 def test_select_tenure_breaks_rate_and_credit_tie():
@@ -246,7 +246,7 @@ class _NoAuthClient:
 
 def _sel():
     return [{"loanId": 123, "borrowerUserId": 999, "rate": 100.08,
-             "score": 625.0, "noCredit": True, "tenure": 6.0, "amtLeft": 5000.0}]
+             "score": 700.0, "noCredit": True, "tenure": 6.0, "amtLeft": 5000.0}]
 
 
 def test_exclude_invested_filters_ids():

@@ -33,11 +33,11 @@ def _f(env: str, default: float) -> float:
 NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # ALERT gate (rate >)
 NOTIFY_HIGH_RATE_PCT: float = _f("NOTIFY_HIGH_RATE_PCT", 100.0)       # LOUD alert gate (rate >)
 AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 110.0) # MONEY gate (rate >)
-# Credit gate: skip loans with score BELOW this (score >= 600 qualifies).
-# Loans with NO credit score are IMPUTED as NO_CREDIT_IMPUTED_SCORE (625 — the
-# 600-650 "High Risk / High Uncertainty" band), so they qualify for the 600 gate
-# but are ranked as high-risk, never treated as a 0 score.
-AUTOINVEST_MIN_CREDIT_SCORE: float = _f("AUTOINVEST_MIN_CREDIT_SCORE", 600.0)
+# Credit gate: skip loans with score BELOW this (score >= 700 qualifies).
+# Loans with NO credit score are IMPUTED as NO_CREDIT_IMPUTED_SCORE (700), so
+# they PASS the 700 gate (a missing bureau file is not a 0) but rank as
+# high-risk/uncertain below any real 750+ score — never treated as a 0 score.
+AUTOINVEST_MIN_CREDIT_SCORE: float = _f("AUTOINVEST_MIN_CREDIT_SCORE", 700.0)
 TOPUP_MIN_RATE_PCT: float = _f("TOPUP_MIN_RATE_PCT", 150.0)          # ADD-FUNDS trigger (rate >)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────
@@ -74,10 +74,10 @@ AMOUNT_FIELDS = ("pl_amt_left", "pl_final_amt", "pl_amt")
 # ── ranking policy (shared by notify sort + auto-invest select) ──────────────
 # Order of importance: RETURN (rate) first, then borrower CREDIT SCORE, then
 # loan TENURE (longer = better for locking in a high rate). A borrower with NO
-# credit score is IMPUTED as this value (the 600-650 "High Risk / High
-# Uncertainty" band — high risk, not favored) and is FLAGGED as "no credit
+# credit score is IMPUTED as this value (700 — passes the 700 gate but ranks as
+# high-risk/uncertain below any real 750+ score) and is FLAGGED as "no credit
 # score" in the notification.
-NO_CREDIT_IMPUTED_SCORE = 625.0
+NO_CREDIT_IMPUTED_SCORE = 700.0
 
 # ── browser-parity headers (keep the API from 502-ing direct requests) ──────
 ORIGIN = "https://www.i2ifunding.com"
