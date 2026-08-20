@@ -56,6 +56,24 @@ def _first(d: dict, keys: tuple[str, ...]) -> object | None:
     return None
 
 
+def _credit_score(ln: dict) -> float | None:
+    """Borrower credit score from a raw feed row. Prefers usr_cibil_score, falls
+    back to bloan_cibil_score (matches transform.py). None for a genuinely
+    missing/no-history score ('-1' => None) — never 0, so a missing bureau file
+    is imputed as NO_CREDIT_IMPUTED_SCORE, not treated as a bad real score."""
+    for k in ("usr_cibil_score", "bloan_cibil_score"):
+        v = ln.get(k)
+        if v in (None, "", "-1"):
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f > 0:
+            return f
+    return None
+
+
 def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT,
            min_score: float = C.AUTOINVEST_MIN_CREDIT_SCORE) -> list[dict]:
     """Raw rows -> candidates with rate STRICTLY > min_rate AND credit score
@@ -72,9 +90,9 @@ def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT,
         rate = to_float(_first(ln, C.RATE_FIELDS))
         if rate <= min_rate:
             continue
-        raw_score = ln.get("bloan_cibil_score")
-        no_credit = raw_score in (None, "") or to_float(raw_score) <= 0
-        score = C.NO_CREDIT_IMPUTED_SCORE if no_credit else to_float(raw_score)
+        raw_score = _credit_score(ln)
+        no_credit = raw_score is None
+        score = C.NO_CREDIT_IMPUTED_SCORE if no_credit else raw_score
         if score < min_score:
             continue  # credit gate: below threshold -> never invest
         out.append({
@@ -104,6 +122,34 @@ def exclude_invested(sel: list[dict], invested_ids: set[int]) -> list[dict]:
     """Drop candidates already funded (data/invested-loans.json) so a later run
     never re-attempts the same loan."""
     return [s for s in sel if s["loanId"] is not None and int(s["loanId"]) not in invested_ids]
+
+
+def credit_near_misses(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT,
+                       min_score: float = C.AUTOINVEST_MIN_CREDIT_SCORE) -> list[dict]:
+    """Loans that PASS the rate gate but FAIL the credit gate — the market has
+    money-left-on-the-table because of the credit filter. Each entry:
+    {loanId, rate, score, noCredit}. Sorted by rate desc. This is a read-only
+    diagnostic (never invested here) so the operator can see WHY a hot loan
+    wasn't auto-invested."""
+    out = []
+    for ln in loans:
+        if not isinstance(ln, dict):
+            continue
+        rate = to_float(_first(ln, C.RATE_FIELDS))
+        if rate <= min_rate:
+            continue
+        raw_score = _credit_score(ln)
+        no_credit = raw_score is None
+        score = C.NO_CREDIT_IMPUTED_SCORE if no_credit else raw_score
+        if score >= min_score:
+            continue  # already a candidate
+        out.append({
+            "loanId": _first(ln, C.LOAN_ID_FIELDS),
+            "rate": rate,
+            "score": score,
+            "noCredit": no_credit,
+        })
+    return sorted(out, key=lambda x: x["rate"], reverse=True)
 
 
 def is_loan_maxed(text: str) -> bool:
@@ -370,7 +416,24 @@ def run(live: bool = False, account: str | None = None) -> int:
                f"after dedup: 0 -> nothing to invest, exiting")
         log.info(msg)
         print(msg)
+        # NEAR-MISS visibility: loans that cleared the RATE gate but failed the
+        # CREDIT gate — money-left-on-the-table the operator should know about.
+        misses = credit_near_misses(loans, gate, credit_gate)
+        if misses:
+            top = ", ".join(f"{m['loanId']}@{m['rate']:.0f}%"
+                            f"(score {m['score']:.0f}{' no-credit' if m['noCredit'] else ''})"
+                            for m in misses[:10])
+            log.info("%d near-miss loan(s) (rate ok, credit < %.0f): %s",
+                     len(misses), credit_gate, top)
+            print(f"near-miss: {len(misses)} loan(s) passed rate >{gate:.0f}% but "
+                  f"failed credit >= {credit_gate:.0f} — not invested: {top}")
+        _watchdog_idle(acct, credit_gate)
         return 0
+    # A qualifying run exists — reset the idle watchdog clock.
+    try:
+        storage.save_idle_state(None)
+    except Exception:  # noqa: BLE001
+        pass
 
     try:
         client = I2iClient.from_env(acct)
@@ -397,4 +460,102 @@ def show_wallet(account: str | None = None) -> int:
         return 1
     wallet = client.wallet()
     print(f"account={acct} investable escrow = Rs {wallet:,.2f}")
+    return 0
+
+
+def _watchdog_idle(acct: str, credit_gate: float) -> None:
+    """Idle-capital nudge: when the auto-investor has seen NO qualifying loan
+    for IDLE_WATCHDOG_DAYS, send a Telegram reminder so idle escrow never goes
+    silently unmonitored. Silent (does not buzz). Never raises."""
+    from datetime import datetime, timezone
+
+    days = C.IDLE_WATCHDOG_DAYS
+    if days <= 0:
+        return
+    try:
+        state = storage.load_idle_state()
+        last = state.get("lastQualifiedAt")
+        now = datetime.now(timezone.utc)
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                elapsed_days = (now - last_dt).total_seconds() / 86400.0
+            except ValueError:
+                elapsed_days = 0.0
+            if elapsed_days < days:
+                storage.save_idle_state(last)
+                return
+        if last is None:
+            # First run ever with nothing qualifying — start the clock.
+            storage.save_idle_state(now.isoformat().replace("+00:00", "Z"))
+            return
+        # Threshold crossed: nudge (once; the stored timestamp keeps it silent
+        # for another window even if the next runs also find nothing).
+        try:
+            send_telegram_text(
+                "⏳ <b>i2i auto-invest: market idle</b>\n"
+                f"No loan has qualified (rate &gt; gate, credit &gt;= {credit_gate:.0f}) "
+                f"for {days:.0f}+ days.\nYour escrow is sitting idle — either the "
+                f"market is quiet or the gates are too strict.\n"
+                f"account={acct}",
+                silent=True,
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("failed to send idle-watchdog Telegram nudge")
+        # Reset the clock so the nudge is not repeated every run.
+        storage.save_idle_state(now.isoformat().replace("+00:00", "Z"))
+    except Exception as e:  # noqa: BLE001
+        log.warning("idle watchdog skipped: %s", e)
+
+
+def show_config() -> int:
+    """Print the EFFECTIVE gates (env-var value -> per-account override -> code
+    default) so 'why didn't it invest?' questions are answerable at a glance.
+    Also prints the idle watchdog + top-up thresholds. No network."""
+    print("=== effective config (env -> account override -> default) ===")
+    for acct in accounts.account_names():
+        rate = accounts.get_float(acct, "AUTOINVEST_MIN_RATE_PCT", C.AUTOINVEST_MIN_RATE_PCT)
+        credit = accounts.get_float(acct, "AUTOINVEST_MIN_CREDIT_SCORE", C.AUTOINVEST_MIN_CREDIT_SCORE)
+        topup = accounts.get_float(acct, "TOPUP_MIN_RATE_PCT", C.TOPUP_MIN_RATE_PCT)
+        print(f"  account={acct}: rate >{rate:.0f}% | credit >= {credit:.0f} "
+              f"(no-score imputed {C.NO_CREDIT_IMPUTED_SCORE:.0f}) | top-up >{topup:.0f}%")
+    print(f"  per-loan cap: Rs {C.PER_LOAN_CAP:,.0f} | min invest: Rs {C.INVEST_MIN_AMOUNT:,.0f} "
+          f"| idle watchdog: {C.IDLE_WATCHDOG_DAYS:.0f}d | notify gates: >{C.NOTIFY_MIN_RATE_PCT:.0f}% "
+          f"(loud >{C.NOTIFY_HIGH_RATE_PCT:.0f}%)")
+    print(f"  repo vars override in CI (AUTOINVEST_MIN_RATE_PCT / "
+          f"AUTOINVEST_MIN_CREDIT_SCORE) — not visible from a local shell")
+    return 0
+
+
+def portfolio_digest(account: str | None = None) -> int:
+    """One-line-per-account portfolio summary sent to Telegram (silent):
+    investable escrow, invested-loan count, and the near-miss count from the
+    CURRENT market — a standing 'eyes on the system' ping without any money
+    movement. Requires TELEGRAM creds; no-op otherwise."""
+    lines = ["📋 <b>i2i portfolio digest</b>"]
+    accounts_list = [account] if account else accounts.account_names()
+    for acct in accounts_list:
+        try:
+            client = I2iClient.from_env(acct)
+            wallet = client.wallet()
+            invested = len(storage.load_invested(account=acct))
+            # near-miss count from the live market (rate ok, credit too low)
+            from .sources.i2i import fetch_all_loans
+            loans = fetch_all_loans()
+            rate = accounts.get_float(acct, "AUTOINVEST_MIN_RATE_PCT", C.AUTOINVEST_MIN_RATE_PCT)
+            credit = accounts.get_float(acct, "AUTOINVEST_MIN_CREDIT_SCORE", C.AUTOINVEST_MIN_CREDIT_SCORE)
+            misses = len(credit_near_misses(loans, rate, credit))
+            lines.append(
+                f"• <b>{acct}</b>: escrow Rs {wallet:,.0f} | {invested} loan(s) invested "
+                f"| {len(loans)} open | {misses} near-miss (rate ok, credit low)"
+            )
+        except SystemExit as e:  # no auth
+            lines.append(f"• <b>{acct}</b>: no auth — {e}")
+        except Exception as e:  # noqa: BLE001
+            log.warning("digest account %s failed: %s", acct, e)
+            lines.append(f"• <b>{acct}</b>: error ({e})")
+    try:
+        send_telegram_text("\n".join(lines), silent=True)
+    except Exception:  # noqa: BLE001
+        log.warning("failed to send portfolio digest")
     return 0

@@ -39,6 +39,9 @@ AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 110.0) # MONEY ga
 # high-risk/uncertain below any real 750+ score — never treated as a 0 score.
 AUTOINVEST_MIN_CREDIT_SCORE: float = _f("AUTOINVEST_MIN_CREDIT_SCORE", 700.0)
 TOPUP_MIN_RATE_PCT: float = _f("TOPUP_MIN_RATE_PCT", 150.0)          # ADD-FUNDS trigger (rate >)
+# Idle-capital watchdog: after this many days with NO qualifying loan, the
+# auto-investor pings Telegram so idle escrow never goes silently unmonitored.
+IDLE_WATCHDOG_DAYS: float = _f("IDLE_WATCHDOG_DAYS", 3.0)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────
 PER_LOAN_CAP: float = _f("PER_LOAN_CAP", 5000.0)             # never exceed per loan

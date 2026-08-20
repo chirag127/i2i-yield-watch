@@ -115,7 +115,19 @@ python -m i2i_watch invest --account neeru    # DRY RUN for the neeru account
 python -m i2i_watch invest --live             # REAL money (default account)
 python -m i2i_watch cancel <loanId>…          # DRY RUN of cancel
 python -m i2i_watch cancel <loanId> --live    # reverse funding(s)
+python -m i2i_watch wallet --account chirag   # real investable escrow balance
+python -m i2i_watch config                    # EFFECTIVE gates (env -> account -> default)
+python -m i2i_watch digest                    # portfolio summary to Telegram (silent)
 ```
+
+**Near-miss visibility** — when a run finds nothing to invest, it also reports
+loans that passed the RATE gate but failed the CREDIT gate (money-left-on-the-
+table), so you can see *why* a hot loan wasn't auto-invested.
+
+**Idle-capital watchdog** — after `IDLE_WATCHDOG_DAYS` (default 3) with no
+qualifying loan, the auto-investor sends a silent Telegram nudge so idle escrow
+never goes unmonitored. State lives in `data/invest-idle.json` (committed by
+invest.yml).
 
 **Multi-account portfolio** (`accounts.py`): the platform caps ~₹5,000 per loan per
 investor, so the portfolio runs one account per i2i login — each with its OWN
@@ -148,6 +160,7 @@ gets first pick of every qualifying loan. Both accounts gate at **>110%**
 | `I2I_DIGEST_HOURS` | unset | Re-send the qualifying set every N hours even when unchanged (so a stable market never goes silent) |
 | `AUTOINVEST_MIN_RATE_PCT` | `110` | **Auto-invest gate** — place real money only on rate **>** this |
 | `AUTOINVEST_MIN_CREDIT_SCORE` | `700` | **Credit gate** — skip loans with score **<** this (no-score loans are imputed 700 and pass) |
+| `IDLE_WATCHDOG_DAYS` | `3` | After this many days with no qualifying loan, send a silent Telegram nudge |
 | `PER_LOAN_CAP` | `5000` | Max ₹ placed in one loan |
 | `INVEST_MIN_AMOUNT` | `1000` | Min ₹ per investment (skip below) |
 | `I2I_EMAIL` / `I2I_PASSWORD` | — | Login creds (password AES-encrypted client-side) — **primary** auth (default account) |
@@ -192,16 +205,19 @@ On Windows use `py` launcher: `py -m i2i_watch --iterations 1 -v`.
 
 ```
 src/i2i_watch/
-  sources/i2i.py     Playwright XHR scraper
+  sources/i2i.py     Direct-HTTP listing (Playwright browser fallback)
   transform.py       Raw rows → normalised loan dicts
   scorer.py          Yield score + priority labels
   storage.py         JSON (git-as-DB) + optional Firestore
   pipeline.py        Orchestrates scrape → transform → score → store → notify
+  accounts.py        Multi-account portfolio (chirag default, neeru secondary)
+  client.py          All i2i HTTP (login, wallet, invest, cancel, top-up)
+  invest.py          Pure select/rank/size/EMI + orchestrator
+  cancel.py          Reverse fundings
+  topup.py           Escrow top-up (UPI/Paytm checkout)
   notify/
-    telegram.py      Telegram bot sender
-    ntfy.py          ntfy.sh sender
-    formatter.py     Compact loan block formatter
-  __main__.py        CLI entry point (--iterations, --interval, -v, --reset-notify-state)
+    channels.py      Telegram + ntfy senders
+  __main__.py        CLI entry point (invest/cancel/wallet/config/digest)
 
 dashboard/
   index.html         Single-page app shell
@@ -210,14 +226,40 @@ dashboard/
 
 data/                git-as-DB state (committed by CI)
   active-loans.json
+  invested-loans.json        placed loanIds (default account, dedup)
+  invested-loans-neeru.json  placed loanIds (neeru, dedup)
+  invest-idle.json           idle-watchdog last-qualified timestamp
   stats.json
   notify-state.json
   notifications-sent.json
   runs.json
   archive/
 
-.github/workflows/scrape.yml   Cron + self-loop + commit-data-back + deploy
+.github/workflows/scrape.yml        Cron + self-loop + commit-data-back + deploy
+.github/workflows/invest.yml        REAL-MONEY auto-invest (chirag then neeru)
+.github/workflows/wallet-check.yml  Daily investable-escrow Telegram ping
+.github/workflows/digest.yml        Weekly portfolio summary to Telegram
 ```
+
+## Reliability: external cron pinger (optional)
+
+GitHub's free-tier cron is best-effort — ticks can arrive late or be skipped
+under load (observed ~30-40 min effective even with a 15-min schedule).
+`scrape.yml` already listens for a `repository_dispatch` event of type `tick`,
+so you can get TRUE sub-15-min polling from a free external pinger:
+
+1. Create a fine-grained PAT (`repo` → `actions: write`) and store it as the
+   `I2I_DISPATCH_TOKEN` secret.
+2. On [cron-job.org](https://cron-job.org) (or healthchecks.io), make a job
+   every 5 minutes that POSTs:
+   ```bash
+   curl -X POST https://api.github.com/repos/chirag127/i2i-yield-watch/dispatches \
+     -H "Authorization: Bearer $I2I_DISPATCH_TOKEN" \
+     -H "Accept: application/vnd.github+json" \
+     -d '{"event_type":"tick"}'
+   ```
+   Each ping fires a scrape run; the self-loop + per-run dedup make it
+   idempotent, so a late/duplicate ping is harmless.
 
 ---
 

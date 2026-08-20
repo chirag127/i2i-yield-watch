@@ -118,9 +118,9 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # OWNERSHIP PARTITION: scrape commits ONLY its own state files. The
-          # invested-loans*.json files belong to invest.yml — never stage them
-          # here, or concurrent invest runs collide on rebase/push (the two
-          # workflows must not interfere; see invest.yml).
+          # invested-loans*.json + invest-idle.json files belong to invest.yml
+          # — never stage them here, or concurrent invest runs collide on
+          # rebase/push (the two workflows must not interfere; see invest.yml).
           git add data/active-loans.json data/notifications-sent.json \
                   data/notify-state.json data/stats.json data/runs.json \
                   data/archive data/index.html 2>/dev/null || true

@@ -110,7 +110,7 @@ jobs:
           # exist and git add would abort with exit 128, staging NOTHING —
           # silently losing placed investments from git (observed 2026-08-19:
           # 5 chirag loans placed but never committed).
-          git add data/invested-loans*.json 2>/dev/null || true
+          git add data/invested-loans*.json data/invest-idle.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no invest state change"
           else
@@ -186,7 +186,7 @@ jobs:
           # (scrape.yml commits the rest of data/). The two workflows run on
           # different schedules and must never rebase/push the same files.
           # Glob like the chirag job (see its comment re: pathspec abort).
-          git add data/invested-loans*.json 2>/dev/null || true
+          git add data/invested-loans*.json data/invest-idle.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no invest state change"
           else

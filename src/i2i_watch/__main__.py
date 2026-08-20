@@ -7,6 +7,8 @@ Subcommands:
   invest [--live]            place investments (dry-run unless --live)
   cancel <loanId>… [--live]  reverse fundings (dry-run unless --live)
   wallet                     print the real investable escrow balance
+  config                     print the EFFECTIVE gates (env -> account -> default)
+  digest                     portfolio summary to Telegram (silent, no money)
 """
 
 from __future__ import annotations
@@ -44,6 +46,18 @@ def _cmd_wallet(args) -> int:
     return show_wallet(account=args.account)
 
 
+def _cmd_config(args) -> int:
+    from .invest import show_config
+
+    return show_config()
+
+
+def _cmd_digest(args) -> int:
+    from .invest import portfolio_digest
+
+    return portfolio_digest(account=args.account)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="i2i_watch", description="i2iFunding high-yield loan watch")
     p.add_argument("--iterations", type=int, default=1, help="self-loop count")
@@ -73,6 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     pw = sub.add_parser("wallet", help="print the real investable escrow balance (availableWallet minus committed funds)")
     pw.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
     pw.add_argument("-v", "--verbose", action="store_true")
+    pc2 = sub.add_parser("config", help="print the EFFECTIVE gates (env -> account override -> default)")
+    pc2.add_argument("-v", "--verbose", action="store_true")
+    pd = sub.add_parser("digest", help="portfolio summary to Telegram (silent, no money)")
+    pd.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
+    pd.add_argument("-v", "--verbose", action="store_true")
 
     args = p.parse_args(argv)
     configure_logging(getattr(args, "verbose", False))
@@ -85,6 +104,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_topup(args)
     if args.cmd == "wallet":
         return _cmd_wallet(args)
+    if args.cmd == "config":
+        return _cmd_config(args)
+    if args.cmd == "digest":
+        return _cmd_digest(args)
 
     # default: scrape/monitor loop
     if args.reset_notify_state:

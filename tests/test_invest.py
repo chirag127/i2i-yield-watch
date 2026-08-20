@@ -12,6 +12,7 @@ from i2i_watch import invest as INV
 from i2i_watch.auth import encrypt_password
 from i2i_watch.invest import (
     build_invest_payload,
+    credit_near_misses,
     emi,
     exclude_invested,
     is_loan_maxed,
@@ -312,12 +313,164 @@ def test_run_excludes_invested(monkeypatch, capsys):
 
     rows = [
         {"pl_bloan_id": 1, "pl_user_id": 9, "pl_applicable_rate": "110.08",
-         "bloan_cibil_score": 800, "pl_amt_left": "5000", "bloan_tenure": 6},
+         "usr_cibil_score": 800, "pl_amt_left": "5000", "bloan_tenure": 6},
         {"pl_bloan_id": 2, "pl_user_id": 9, "pl_applicable_rate": "110.08",
-         "bloan_cibil_score": 800, "pl_amt_left": "5000", "bloan_tenure": 6},
+         "usr_cibil_score": 800, "pl_amt_left": "5000", "bloan_tenure": 6},
     ]
     monkeypatch.setattr(src, "fetch_all_loans", lambda: rows)
     monkeypatch.setattr(INV.storage, "load_invested", lambda **kw: [1])
     monkeypatch.setattr(INV, "I2iClient", _NoAuthClient)
     assert INV.run(live=False) == 0
     assert "1 loans >110%" in capsys.readouterr().out
+
+
+# ── near-miss visibility + idle watchdog + config/digest ─────────────────────
+
+
+def test_credit_near_misses_flags_rate_ok_credit_low():
+    rows = [
+        # qualifies (rate > 110 AND credit >= 700) -> NOT a near-miss
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "usr_cibil_score": 800, "pl_amt_left": "5000"},
+        # near-miss: rate ok, real credit too low
+        {"pl_bloan_id": 2, "pl_applicable_rate": "118.0", "usr_cibil_score": 650, "pl_amt_left": "5000"},
+        # near-miss: rate ok, no credit (imputed 700 still < nothing? no: 700 >= 700 passes)
+        {"pl_bloan_id": 3, "pl_applicable_rate": "116.0", "usr_cibil_score": None, "pl_amt_left": "5000"},
+        # below rate gate -> not a near-miss either
+        {"pl_bloan_id": 4, "pl_applicable_rate": "100.0", "usr_cibil_score": 500, "pl_amt_left": "5000"},
+    ]
+    misses = credit_near_misses(rows, 110.0, 700.0)
+    # only loan 2: rate 118 > 110 but credit 650 < 700. Loan 3 imputed 700 >= 700
+    # so it QUALIFIES (not a near-miss); loan 1 qualifies; loan 4 below rate gate.
+    assert [m["loanId"] for m in misses] == [2]
+    assert misses[0]["rate"] == 118.0 and misses[0]["score"] == 650.0
+
+
+def test_credit_near_misses_sorted_by_rate_desc():
+    rows = [
+        {"pl_bloan_id": 1, "pl_applicable_rate": "115.0", "usr_cibil_score": 600, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "125.0", "usr_cibil_score": 500, "pl_amt_left": "5000"},
+    ]
+    assert [m["loanId"] for m in credit_near_misses(rows, 110.0, 700.0)] == [2, 1]
+
+
+def test_select_reads_usr_cibil_score_with_bloan_fallback():
+    # live feed carries the score in usr_cibil_score; bloan is the fallback
+    rows = [
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "usr_cibil_score": 800, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "usr_cibil_score": "-1", "pl_amt_left": "5000"},
+        {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "usr_cibil_score": 650, "pl_amt_left": "5000"},
+    ]
+    sel = select(rows, 110.0, 700.0)
+    # 1 (800), 2 (750 fallback), 3 (no-credit imputed 700) qualify; 4 (650) dropped
+    assert [s["loanId"] for s in sel] == [1, 2, 3]
+    assert next(s for s in sel if s["loanId"] == 3)["noCredit"] is True
+
+
+def test_idle_watchdog_nudges_after_threshold(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    old = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat().replace("+00:00", "Z")
+    sent = []
+
+    def fake_save(state):
+        return None
+
+    monkeypatch.setattr(INV.storage, "load_idle_state", lambda: {"lastQualifiedAt": old})
+    monkeypatch.setattr(INV.storage, "save_idle_state", fake_save)
+    monkeypatch.setattr(INV, "send_telegram_text", lambda text, silent=False: sent.append(text) or True)
+    INV._watchdog_idle("chirag", 700.0)
+    assert sent and "market idle" in sent[0]
+
+
+def test_idle_watchdog_silent_before_threshold(monkeypatch):
+    from datetime import datetime, timezone
+
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    sent = []
+    monkeypatch.setattr(INV.storage, "load_idle_state", lambda: {"lastQualifiedAt": fresh})
+    monkeypatch.setattr(INV.storage, "save_idle_state", lambda state: None)
+    monkeypatch.setattr(INV, "send_telegram_text", lambda text, silent=False: sent.append(text) or True)
+    INV._watchdog_idle("chirag", 700.0)
+    assert sent == []
+
+
+def test_show_config_prints_effective_gates(capsys):
+    assert INV.show_config() == 0
+    out = capsys.readouterr().out
+    assert "account=" in out and "rate >" in out and "credit >=" in out
+    assert "idle watchdog" in out
+
+
+def test_portfolio_digest_no_auth_does_not_raise(monkeypatch):
+    monkeypatch.setattr(INV, "I2iClient", _NoAuthClient)
+    monkeypatch.setattr(INV, "send_telegram_text", lambda *a, **k: True)
+    assert INV.portfolio_digest() == 0
+
+
+# ── fixture-based end-to-end: full invest pipeline, no network ───────────────
+
+
+def test_end_to_end_plan_from_fixture(monkeypatch):
+    """Locks the FULL invest path: fetch (fixture) -> select -> plan -> place.
+    Uses a fake client whose invest() returns success, and asserts the final
+    investorNow payloads carry the right amounts. No network, real fixture rows."""
+    import json
+    from pathlib import Path
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "loans_raw.json").read_text(encoding="utf-8")
+    )
+    # Make every fixture row qualify: rate > 110 AND credit >= 700 (or no-credit).
+    rows = []
+    for i, ln in enumerate(fixture):
+        row = dict(ln)
+        row["pl_applicable_rate"] = f"{120.0 + i}"
+        row["pl_amt_left"] = "20000"  # fixture has one row with 0 left; make all investable
+        if i % 2 == 0:
+            row["usr_cibil_score"] = 780
+        else:
+            row["usr_cibil_score"] = None  # no-credit imputed 700, passes
+        rows.append(row)
+
+    import i2i_watch.sources.i2i as src
+    monkeypatch.setattr(src, "fetch_all_loans", lambda: rows)
+    monkeypatch.setattr(INV.storage, "load_invested", lambda **kw: [])
+
+    placed_payloads = []
+
+    class _E2EClient:
+        @classmethod
+        def from_env(cls, account=None):
+            return cls()
+
+        def wallet(self):
+            return 30000.0
+
+        def loan_detail(self, uid, lid):
+            return {
+                "pl_bloan_id": int(lid), "pl_user_id": uid, "bloan_tenure": 6,
+                "pl_current_rate": "120.0", "bname": "x", "bloan_i2i_category": "X",
+                "purpose": "x", "min_invest_loan_amount": 1000,
+                "max_invest_loan_amount": 5000, "invest_multiple_value": 1,
+            }
+
+        def principal_protection(self, *a):
+            return {}
+
+        def invest(self, payload):
+            placed_payloads.append(dict(payload))
+            return {"data": "Invested Successfully", "message": "Fund added successfully."}
+
+    monkeypatch.setattr(INV, "I2iClient", _E2EClient)
+    monkeypatch.setenv("I2I_TXN_PIN", "1234")
+    with patch.object(INV.storage, "record_invested"), patch.object(INV, "send_telegram_text"):
+        assert INV.run(live=True) == 0
+    # All 5 fixture loans placed at min(5000, remaining) — 5 x Rs 5,000
+    assert len(placed_payloads) == 5
+    assert all(p["amount"] <= 5000 for p in placed_payloads)
+    assert all(p["amount"] >= 1000 for p in placed_payloads)
+    total = sum(p["amount"] for p in placed_payloads)
+    assert total == 25000 and total <= 30000  # 5 x cap, within the wallet
+    assert all(p["transactionPin"] == "1234" for p in placed_payloads)
+    assert all("loanId" in p and "monthlyEMI" in p for p in placed_payloads)

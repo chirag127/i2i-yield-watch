@@ -1,6 +1,14 @@
 name: i2i Wallet Check
 
+# Daily investable-escrow check: prints (and Telegram-pings) each account's REAL
+# investable balance — availableWallet minus funds committed to open proposals.
+# wallet() only runs inside invest when candidates exist, so a quiet market
+# would otherwise hide a drained/frozen escrow until a loan appears. This
+# workflow is the standing eyes-on-the-balance ping. Dispatchable anytime.
+
 on:
+  schedule:
+    - cron: "30 7 * * *"   # daily 07:30 UTC (13:00 IST)
   workflow_dispatch:
 
 jobs:
@@ -31,4 +39,16 @@ jobs:
           I2I_NEERU_PASSWORD: ${{ secrets.I2I_NEERU_PASSWORD }}
           I2I_NEERU_CSRF_TOKEN: ${{ secrets.I2I_NEERU_CSRF_TOKEN }}
           I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
-        run: .venv-ci/bin/python -m i2i_watch wallet --account ${{ matrix.account }} -v
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "== ${{ matrix.account }} investable escrow =="
+          .venv-ci/bin/python -m i2i_watch wallet --account ${{ matrix.account }} -v
+          BAL=$(.venv-ci/bin/python -m i2i_watch wallet --account ${{ matrix.account }} 2>/dev/null | grep -oE 'Rs [0-9,]+' | head -1)
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -sS --max-time 20 -X POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML \
+              -d "text=💳 <b>i2i escrow (${{ matrix.account }})</b>%0Ainvestable: ${BAL:-unavailable}" \
+              >/dev/null && echo "telegram ping sent" || echo "telegram ping failed"
+          fi

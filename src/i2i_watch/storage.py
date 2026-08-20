@@ -456,6 +456,29 @@ def record_invested(loan_ids: list[int], account: str | None = None) -> None:
     log.info("recorded %d invested loan(s) for %s", len(loan_ids), _invested_file(account))
 
 
+def load_idle_state() -> dict:
+    """Idle-capital watchdog state: {lastQualifiedAt: iso|null} — when the auto-
+    investor last saw a qualifying loan. Drives the 'no qualifying loans for N
+    days' nudge so idle escrow never goes silently unmonitored."""
+    init()
+    default = {"lastQualifiedAt": None}
+    if _mode == "json":
+        return _load_json("invest-idle.json", default)
+    doc = _db.collection("meta").document("investIdle").get()
+    return doc.to_dict() if doc.exists else default
+
+
+def save_idle_state(last_qualified_at: str | None) -> None:
+    """Persist the last-qualified timestamp. Call with None on a qualifying run
+    (resets the idle clock), with the old value on an empty run (idle continues)."""
+    init()
+    payload = {"lastQualifiedAt": last_qualified_at}
+    if _mode == "json":
+        _write_json("invest-idle.json", {**payload, "updatedAt": _now_iso()})
+        return
+    _db.collection("meta").document("investIdle").set({**payload, "updatedAt": _ts()})
+
+
 def append_changelog(run_summary: dict) -> None:
     init()
     rid = run_summary.get("runId") or f"run_{int(datetime.now().timestamp() * 1000)}"
