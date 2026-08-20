@@ -11,4 +11,17 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+.venv-ci/
 venv/
+
+# Temp / local artifacts
+tmp/
+.env.gitcrypt.orig
+
+# Lock files (uv.lock is committed for reproducibility)
+# uv.lock
+
+# Editor
+*.swp
+*.swo
+*~
