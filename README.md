@@ -105,7 +105,7 @@ Places (and reverses) investments via **direct HTTP** to the i2i API with **auto
 Modular split: `config.py` (all tunables), `auth.py` (AES login), `client.py` (all HTTP, one place), `invest.py` (pure select/rank/size/EMI + orchestrator), `cancel.py` (thin).
 
 - **Login:** POST `.../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Fresh `session_id` + `csrf_token` every run — token expiry is a non-issue. **Auth chain:** auto-login is the primary path; `I2I_CSRF_TOKEN` + `I2I_SESSION_ID` (captured from a HAR) are used only as a fallback if login fails or no creds are set — session tokens expire, so they must never be the primary auth.
-- **Select + rank:** loans with rate **strictly > `AUTOINVEST_MIN_RATE_PCT`** (default **110**) **AND** credit score **>= `AUTOINVEST_MIN_CREDIT_SCORE`** (default **700** — a missing credit score is imputed 700 and *passes* the gate; never treated as 0), ranked rate desc then `bloan_cibil_score` desc.
+- **Select + rank:** loans with rate **strictly > `AUTOINVEST_MIN_RATE_PCT`** (default **100**) **AND** credit score **>= `AUTOINVEST_MIN_CREDIT_SCORE`** (default **720** — a missing credit score is imputed 720 and *passes* the gate; never treated as 0), ranked rate desc then `bloan_cibil_score` desc.
 - **Size:** `min(PER_LOAN_CAP, amtLeft, wallet)`, floored to `invest_multiple_value` and whole rupees, skipped if `< INVEST_MIN_AMOUNT`. A run keeps going down the ranked list until the wallet is exhausted (no per-run cap).
 - **Dry-run default** — prints the plan, places nothing. `--live` places for real (requires `I2I_TXN_PIN`). Any error mid-run STOPS.
 
@@ -142,8 +142,8 @@ a row in the `invest.yml` matrix.
 CI: `.github/workflows/invest.yml` runs **two sequential jobs in the IST daytime
 window — chirag always first** (`invest-chirag` places and commits, then
 `invest-neeru` starts via `needs:` and fills what's left), so the primary account
-gets first pick of every qualifying loan. Both accounts gate at **>110%**
-(chirag >110%, neeru >110%), credit score **>= 700**. Requires per-account secrets
+gets first pick of every qualifying loan. Both accounts gate at **>100%**
+(chirag >100%, neeru >100%), credit score **>= 720**. Requires per-account secrets
 `I2I_EMAIL`/`I2I_PASSWORD`/`I2I_TXN_PIN` (chirag) and `I2I_NEERU_*` (neeru) +
 `TELEGRAM_*` for the summary; CSRF/SESSION tokens are optional fallback auth
 (refresh from a HAR when login is unavailable).
@@ -158,8 +158,8 @@ gets first pick of every qualifying loan. Both accounts gate at **>110%**
 | `NOTIFY_MIN_RATE_PCT` | `50` | **Notify gate** — Telegram alert on loans with rate **>** this |
 | `NOTIFY_HIGH_RATE_PCT` | `100` | **LOUD alert gate** — fires the moment a loan exceeds this (auto-invest candidate), even if the standard set is unchanged |
 | `I2I_DIGEST_HOURS` | unset | Re-send the qualifying set every N hours even when unchanged (so a stable market never goes silent) |
-| `AUTOINVEST_MIN_RATE_PCT` | `110` | **Auto-invest gate** — place real money only on rate **>** this |
-| `AUTOINVEST_MIN_CREDIT_SCORE` | `700` | **Credit gate** — skip loans with score **<** this (no-score loans are imputed 700 and pass) |
+| `AUTOINVEST_MIN_RATE_PCT` | `100` | **Auto-invest gate** — place real money only on rate **>** this |
+| `AUTOINVEST_MIN_CREDIT_SCORE` | `720` | **Credit gate** — skip loans with score **<** this (no-score loans are imputed 720 and pass) |
 | `IDLE_WATCHDOG_DAYS` | `3` | After this many days with no qualifying loan, send a silent Telegram nudge |
 | `IDLE_WATCHDOG_LOUD` | `false` | Make the idle nudge a loud (buzzing) alert |
 | `WALLET_ALERT_THRESHOLD` | `10000` | Below this Rs investable escrow, the wallet-check ping becomes a LOUD alert |

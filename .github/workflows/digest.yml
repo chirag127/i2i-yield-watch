@@ -39,8 +39,8 @@ jobs:
           I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '110' }}
-          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '700' }}
+          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
+          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}
         run: .venv-ci/bin/python -m i2i_watch digest -v
 
       - name: Alert on failure (a broken digest = silent blind spot)

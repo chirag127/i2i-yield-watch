@@ -66,28 +66,28 @@ def test_select_filters_and_ranks():
     assert [s["loanId"] for s in select(rows, 40.0, min_score=0)] == [4, 2, 1]
 
 
-def test_select_credit_gate_filters_below_700():
-    # real scores below the 700 gate are never invested; 700 and above pass
+def test_select_credit_gate_filters_below_720():
+    # real scores below the 720 gate are never invested; 720 and above pass
     rows = [
-        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 699, "pl_amt_left": "5000"},
-        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 719, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 720, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
         {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 110.0)] == [4, 3, 2]  # 699 dropped
+    assert [s["loanId"] for s in select(rows, 100.0)] == [4, 3, 2]  # 719 dropped
 
 
-def test_select_credit_gate_no_credit_imputed_700_passes():
-    # a loan with NO credit score is imputed NO_CREDIT_IMPUTED_SCORE (700), which
-    # MEETS the 700 gate -> kept, but ranks below any real 750+ score
+def test_select_credit_gate_no_credit_imputed_720_passes():
+    # a loan with NO credit score is imputed NO_CREDIT_IMPUTED_SCORE (720), which
+    # MEETS the 720 gate -> kept, but ranks below any real 750+ score
     rows = [
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": "", "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 0, "pl_amt_left": "5000"},
     ]
-    sel = select(rows, 110.0)
+    sel = select(rows, 100.0)
     assert [s["loanId"] for s in sel] == [1, 2, 3]
-    assert all(s["noCredit"] is True and s["score"] == 700.0 for s in sel)
+    assert all(s["noCredit"] is True and s["score"] == 720.0 for s in sel)
 
 
 def test_select_credit_gate_configurable():
@@ -97,8 +97,8 @@ def test_select_credit_gate_configurable():
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 110.0, min_score=800)] == [2]
-    assert [s["loanId"] for s in select(rows, 110.0, min_score=750)] == [2, 1]
+    assert [s["loanId"] for s in select(rows, 100.0, min_score=800)] == [2]
+    assert [s["loanId"] for s in select(rows, 100.0, min_score=750)] == [2, 1]
 
 
 def test_select_strictly_above_gate():
@@ -106,33 +106,33 @@ def test_select_strictly_above_gate():
     assert select(rows, 40.0) == []  # 40 is NOT > 40
 
 
-def test_autoinvest_gate_default_is_110():
-    # lock the real-money threshold: place only on loans STRICTLY > 110%
-    assert C.AUTOINVEST_MIN_RATE_PCT == 110.0
+def test_autoinvest_gate_default_is_100():
+    # lock the real-money threshold: place only on loans STRICTLY > 100%
+    assert C.AUTOINVEST_MIN_RATE_PCT == 100.0
 
 
-def test_select_gate_110_keeps_only_above_110():
-    # >110% qualifies; exactly 110% and below do not (strict >)
+def test_select_gate_100_keeps_only_above_100():
+    # >100% qualifies; exactly 100% and below do not (strict >)
     rows = [
-        {"pl_bloan_id": 1, "pl_applicable_rate": "110.08", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
-        {"pl_bloan_id": 2, "pl_applicable_rate": "110.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 1, "pl_applicable_rate": "100.08", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "100.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "46.66", "bloan_cibil_score": 900, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 110.0, min_score=0)] == [1]
+    assert [s["loanId"] for s in select(rows, 100.0, min_score=0)] == [1]
 
 
-def test_select_no_credit_imputed_700():
-    # equal rate: real 800 > real 700 >= no-credit(=700 imputed high risk)
+def test_select_no_credit_imputed_720():
+    # equal rate: real 800 > real 720 >= no-credit(=720 imputed high risk)
     rows = [
-        {"pl_bloan_id": 1, "pl_applicable_rate": "46.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 1, "pl_applicable_rate": "46.0", "bloan_cibil_score": 720, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "46.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "46.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    # min_score=0: this test is about the 700 IMPUTATION ranking, not the gate
+    # min_score=0: this test is about the 720 IMPUTATION ranking, not the gate
     sel = select(rows, 40.0, min_score=0)
     assert [s["loanId"] for s in sel] == [3, 1, 2]
     no_credit = next(s for s in sel if s["loanId"] == 2)
-    assert no_credit["noCredit"] is True and no_credit["score"] == 700.0
+    assert no_credit["noCredit"] is True and no_credit["score"] == 720.0
 
 
 def test_select_tenure_breaks_rate_and_credit_tie():
@@ -247,7 +247,7 @@ class _NoAuthClient:
 
 def _sel():
     return [{"loanId": 123, "borrowerUserId": 999, "rate": 100.08,
-             "score": 700.0, "noCredit": True, "tenure": 6.0, "amtLeft": 5000.0}]
+             "score": 720.0, "noCredit": True, "tenure": 6.0, "amtLeft": 5000.0}]
 
 
 def test_exclude_invested_filters_ids():
@@ -321,7 +321,7 @@ def test_run_excludes_invested(monkeypatch, capsys):
     monkeypatch.setattr(INV.storage, "load_invested", lambda **kw: [1])
     monkeypatch.setattr(INV, "I2iClient", _NoAuthClient)
     assert INV.run(live=False) == 0
-    assert "1 loans >110%" in capsys.readouterr().out
+    assert "1 loans >100%" in capsys.readouterr().out
 
 
 # ── near-miss visibility + idle watchdog + config/digest ─────────────────────
@@ -329,17 +329,17 @@ def test_run_excludes_invested(monkeypatch, capsys):
 
 def test_credit_near_misses_flags_rate_ok_credit_low():
     rows = [
-        # qualifies (rate > 110 AND credit >= 700) -> NOT a near-miss
+        # qualifies (rate > 100 AND credit >= 720) -> NOT a near-miss
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "usr_cibil_score": 800, "pl_amt_left": "5000"},
         # near-miss: rate ok, real credit too low
         {"pl_bloan_id": 2, "pl_applicable_rate": "118.0", "usr_cibil_score": 650, "pl_amt_left": "5000"},
-        # near-miss: rate ok, no credit (imputed 700 still < nothing? no: 700 >= 700 passes)
+        # no credit (imputed 720 >= 720 passes) -> NOT a near-miss
         {"pl_bloan_id": 3, "pl_applicable_rate": "116.0", "usr_cibil_score": None, "pl_amt_left": "5000"},
         # below rate gate -> not a near-miss either
         {"pl_bloan_id": 4, "pl_applicable_rate": "100.0", "usr_cibil_score": 500, "pl_amt_left": "5000"},
     ]
-    misses = credit_near_misses(rows, 110.0, 700.0)
-    # only loan 2: rate 118 > 110 but credit 650 < 700. Loan 3 imputed 700 >= 700
+    misses = credit_near_misses(rows, 100.0, 720.0)
+    # only loan 2: rate 118 > 100 but credit 650 < 720. Loan 3 imputed 720 >= 720
     # so it QUALIFIES (not a near-miss); loan 1 qualifies; loan 4 below rate gate.
     assert [m["loanId"] for m in misses] == [2]
     assert misses[0]["rate"] == 118.0 and misses[0]["score"] == 650.0
@@ -350,7 +350,7 @@ def test_credit_near_misses_sorted_by_rate_desc():
         {"pl_bloan_id": 1, "pl_applicable_rate": "115.0", "usr_cibil_score": 600, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "125.0", "usr_cibil_score": 500, "pl_amt_left": "5000"},
     ]
-    assert [m["loanId"] for m in credit_near_misses(rows, 110.0, 700.0)] == [2, 1]
+    assert [m["loanId"] for m in credit_near_misses(rows, 100.0, 720.0)] == [2, 1]
 
 
 def test_select_reads_usr_cibil_score_with_bloan_fallback():
@@ -361,8 +361,8 @@ def test_select_reads_usr_cibil_score_with_bloan_fallback():
         {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "usr_cibil_score": "-1", "pl_amt_left": "5000"},
         {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "usr_cibil_score": 650, "pl_amt_left": "5000"},
     ]
-    sel = select(rows, 110.0, 700.0)
-    # 1 (800), 2 (750 fallback), 3 (no-credit imputed 700) qualify; 4 (650) dropped
+    sel = select(rows, 100.0, 720.0)
+    # 1 (800), 2 (750 fallback), 3 (no-credit imputed 720) qualify; 4 (650) dropped
     assert [s["loanId"] for s in sel] == [1, 2, 3]
     assert next(s for s in sel if s["loanId"] == 3)["noCredit"] is True
 
@@ -379,7 +379,7 @@ def test_idle_watchdog_nudges_after_threshold(monkeypatch):
     monkeypatch.setattr(INV.storage, "load_idle_state", lambda: {"lastQualifiedAt": old})
     monkeypatch.setattr(INV.storage, "save_idle_state", fake_save)
     monkeypatch.setattr(INV, "send_telegram_text", lambda text, silent=False: sent.append(text) or True)
-    INV._watchdog_idle("chirag", 700.0)
+    INV._watchdog_idle("chirag", 720.0)
     assert sent and "market idle" in sent[0]
 
 
@@ -391,7 +391,7 @@ def test_idle_watchdog_silent_before_threshold(monkeypatch):
     monkeypatch.setattr(INV.storage, "load_idle_state", lambda: {"lastQualifiedAt": fresh})
     monkeypatch.setattr(INV.storage, "save_idle_state", lambda state: None)
     monkeypatch.setattr(INV, "send_telegram_text", lambda text, silent=False: sent.append(text) or True)
-    INV._watchdog_idle("chirag", 700.0)
+    INV._watchdog_idle("chirag", 720.0)
     assert sent == []
 
 
@@ -405,7 +405,7 @@ def test_idle_watchdog_loud_when_configured(monkeypatch):
     monkeypatch.setattr(C, "IDLE_WATCHDOG_LOUD", True)
     monkeypatch.setattr(INV, "send_telegram_text",
                         lambda text, silent=False: flags.append(silent) or True)
-    INV._watchdog_idle("chirag", 700.0)
+    INV._watchdog_idle("chirag", 720.0)
     assert flags == [False]  # loud alert (silent=False) when IDLE_WATCHDOG_LOUD=1
 
 
@@ -472,7 +472,7 @@ def test_end_to_end_plan_from_fixture(monkeypatch):
     fixture = json.loads(
         (Path(__file__).parent / "fixtures" / "loans_raw.json").read_text(encoding="utf-8")
     )
-    # Make every fixture row qualify: rate > 110 AND credit >= 700 (or no-credit).
+    # Make every fixture row qualify: rate > 100 AND credit >= 720 (or no-credit).
     rows = []
     for i, ln in enumerate(fixture):
         row = dict(ln)
@@ -481,7 +481,7 @@ def test_end_to_end_plan_from_fixture(monkeypatch):
         if i % 2 == 0:
             row["usr_cibil_score"] = 780
         else:
-            row["usr_cibil_score"] = None  # no-credit imputed 700, passes
+            row["usr_cibil_score"] = None  # no-credit imputed 720, passes
         rows.append(row)
 
     import i2i_watch.sources.i2i as src

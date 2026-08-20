@@ -6,7 +6,7 @@ Ranking importance (both notify sort and auto-invest select):
   2. CREDIT SCORE of the borrower.
   3. TENURE — longer locks the high rate in longer (minor factor).
 A borrower with NO credit score is IMPUTED as config.NO_CREDIT_IMPUTED_SCORE
-(700 — passes the 700 gate, ranks as High Risk / High Uncertainty below any real
+(720 — passes the 720 gate, ranks as High Risk / High Uncertainty below any real
 750+ score) for ranking, and is flagged "no credit score" in the notification
 (see transform.format_loan_block).
 """
@@ -66,7 +66,7 @@ def normalize(value: float | None, lo: float, hi: float) -> float:
 
 
 def calculate_yield_score(loan: dict) -> float:
-    """0..100 opportunity score, 2dp. No-credit -> imputed 700 (high-risk)."""
+    """0..100 opportunity score, 2dp. No-credit -> imputed 720 (high-risk)."""
     rate_n = normalize(loan.get("interestRate"), *BOUNDS["interest_rate"])
     credit_n = normalize(imputed_credit(loan), *BOUNDS["credit_score"])
     income_n = normalize(loan.get("monthlyIncome"), *BOUNDS["monthly_income"])
@@ -109,7 +109,7 @@ def _num(v: object) -> float:
 
 
 def sort_loans(loans: list[dict]) -> list[dict]:
-    """New list sorted by importance: rate desc, credit desc (no-credit=700),
+    """New list sorted by importance: rate desc, credit desc (no-credit=720),
     tenure desc, then income/amount. Funding-remaining is NOT a sort key."""
     return sorted(
         loans,

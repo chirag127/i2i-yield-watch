@@ -8,7 +8,7 @@ name: i2i Auto-Invest (REAL MONEY)
 #                         has placed + pushed. Each account keeps its OWN auth
 #                         secrets (I2I_NEERU_* for the secondary account; legacy
 #                         I2I_* for the default chirag), its OWN rate gate
-#                         (both accounts >110% — chirag first, neeru fills what's
+#                         (both accounts >100% — chirag first, neeru fills what's
 #                         left) and its OWN data/invested-loans-<acct>.json
 #                         namespace — accounts never share dedup state.
 #
@@ -92,10 +92,10 @@ jobs:
           I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # rate gate >110% + credit gate >=700 (no-score imputed 700 and
+          # rate gate >100% + credit gate >=720 (no-score imputed 720 and
           # passes; repo vars override both)
-          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '110' }}
-          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '700' }}
+          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
+          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}
         run: .venv-ci/bin/python -m i2i_watch invest --live --account chirag -v
       - name: Commit invested-loans state (git-as-DB) — chirag
         run: |
@@ -172,11 +172,11 @@ jobs:
           I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # same >110% rate gate as chirag + same 700 credit gate (repo vars
-          # override both accounts together; no-score imputed 700 and passes)
-          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '110' }}
-          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '700' }}
-          I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '110' }}
+          # same >100% rate gate as chirag + same 720 credit gate (repo vars
+          # override both accounts together; no-score imputed 720 and passes)
+          AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
+          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}
+          I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '100' }}
         run: .venv-ci/bin/python -m i2i_watch invest --live --account neeru -v
       - name: Commit invested-loans state (git-as-DB) — neeru
         run: |

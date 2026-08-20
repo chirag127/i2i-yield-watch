@@ -262,7 +262,7 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
     total = sum(p["amount"] for p in plan)
     print(f"\nPLAN ({'LIVE' if live else 'DRY RUN'}): {len(plan)} loan(s), Rs {total:,.0f} total")
     for p in plan:
-        cs = "no-credit→700" if p.get("noCredit") else f"score {p['score']:.0f}"
+        cs = "no-credit→720" if p.get("noCredit") else f"score {p['score']:.0f}"
         print(f"  Loan {p['loanId']}: {p['rate']:.2f}% {cs} -> Rs {p['amount']:,.0f}")
 
     if not live:
