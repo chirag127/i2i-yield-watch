@@ -395,6 +395,57 @@ def test_idle_watchdog_silent_before_threshold(monkeypatch):
     assert sent == []
 
 
+def test_idle_watchdog_loud_when_configured(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    old = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat().replace("+00:00", "Z")
+    flags = []
+    monkeypatch.setattr(INV.storage, "load_idle_state", lambda: {"lastQualifiedAt": old})
+    monkeypatch.setattr(INV.storage, "save_idle_state", lambda state: None)
+    monkeypatch.setattr(C, "IDLE_WATCHDOG_LOUD", True)
+    monkeypatch.setattr(INV, "send_telegram_text",
+                        lambda text, silent=False: flags.append(silent) or True)
+    INV._watchdog_idle("chirag", 700.0)
+    assert flags == [False]  # loud alert (silent=False) when IDLE_WATCHDOG_LOUD=1
+
+
+def test_show_wallet_fires_low_escrow_alert(monkeypatch, capsys):
+    sent = []
+
+    class _C:
+        @classmethod
+        def from_env(cls, account=None):
+            return cls()
+
+        def wallet(self):
+            return 5000.0  # below the 10k threshold
+
+    monkeypatch.setattr(INV, "I2iClient", _C)
+    monkeypatch.setattr(INV, "send_telegram_text",
+                        lambda text, silent=False: sent.append((text, silent)) or True)
+    assert INV.show_wallet() == 0
+    assert "escrow LOW" in sent[0][0] and sent[0][1] is False
+    assert "Rs 5,000" in capsys.readouterr().out
+
+
+def test_show_wallet_no_alert_above_threshold(monkeypatch, capsys):
+    sent = []
+
+    class _C:
+        @classmethod
+        def from_env(cls, account=None):
+            return cls()
+
+        def wallet(self):
+            return 50000.0
+
+    monkeypatch.setattr(INV, "I2iClient", _C)
+    monkeypatch.setattr(INV, "send_telegram_text",
+                        lambda text, silent=False: sent.append(text) or True)
+    assert INV.show_wallet() == 0
+    assert sent == []
+
+
 def test_show_config_prints_effective_gates(capsys):
     assert INV.show_config() == 0
     out = capsys.readouterr().out

@@ -287,6 +287,63 @@ class I2iClient:
         account (NEFT/IMPS/RTGS) details shown on the escrow screen."""
         return self._get(C.API_BASE, "investor/bank/escrowDetails")
 
+    def lending_overview(self) -> dict:
+        """BEST-EFFORT lending summary (total lent, interest received/pending,
+        EMI buckets) for the portfolio digest. The exact overview endpoint is
+        not HAR-captured, so this probes a short list of candidate paths and
+        parses whatever comes back; returns {} when none respond, and the
+        digest then falls back to wallet-only. Never raises."""
+        candidates = (
+            "investor/lendingOverview",
+            "investor/accountOverview",
+            "investor/overview",
+            "investor/lenderDashboard",
+        )
+        for path in candidates:
+            try:
+                d = self._get(C.OPEN_LOANS_HOST, path, timeout=20)
+                data = d.get("data", d) if isinstance(d, dict) else {}
+                if isinstance(data, dict) and data:
+                    log.info("lending_overview: %s -> %s", path, sorted(data.keys()))
+                    return data
+            except Exception:  # noqa: BLE001
+                continue
+        log.info("lending_overview: no candidate endpoint responded — digest uses wallet only")
+        return {}
+
+    def _overview_amounts(self, overview: dict) -> dict:
+        """Pull the common lending-summary numbers out of whatever the overview
+        endpoint returned (field names vary; accept several spellings)."""
+        def pick(*keys: str) -> float:
+            for k in keys:
+                if overview.get(k) is not None:
+                    return to_float(overview.get(k))
+            return 0.0
+
+        total_lent = pick("totalAmountLent", "totalLentAmount", "amountLent",
+                          "totalInvestedAmount", "totalPrincipalInvested")
+        interest_recv = pick("interestReceived", "interestEarned", "totalInterestReceived",
+                             "interestReceivedAmount")
+        principal_recv = pick("principalReceived", "principalReceivedAmount",
+                              "totalPrincipalReceived")
+        pending = pick("totalAmountPending", "amountPending", "totalPendingAmount")
+        interest_pending = pick("interestPending", "pendingInterest", "interestPendingAmount")
+        borrowers = pick("totalNoBorrowers", "totalBorrowers", "noOfBorrowers",
+                         "borrowerCount")
+        avg_rate = pick("averageInterestRate", "avgInterestRate", "averageRate")
+        expected_interest = pick("expectedTotalInterestIncome", "expectedInterestIncome",
+                                 "totalExpectedInterest", "expectedInterest")
+        return {
+            "totalLent": total_lent,
+            "interestReceived": interest_recv,
+            "principalReceived": principal_recv,
+            "totalPending": pending,
+            "interestPending": interest_pending,
+            "borrowers": borrowers,
+            "avgRate": avg_rate,
+            "expectedInterest": expected_interest,
+        }
+
     # ── writes (REAL MONEY) ────────────────────────────────────────────────────
     def invest(self, payload: dict) -> dict:
         """POST investor/investorNow/ (market host). payload carries transactionPin.

@@ -41,10 +41,13 @@ jobs:
           I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # The CLI prints the balance AND fires the low-escrow LOUD alert itself
+          # (wallet() < WALLET_ALERT_THRESHOLD). The daily ping below is the
+          # standing silent balance check; it reuses the same printed value.
         run: |
-          echo "== ${{ matrix.account }} investable escrow =="
-          .venv-ci/bin/python -m i2i_watch wallet --account ${{ matrix.account }} -v
-          BAL=$(.venv-ci/bin/python -m i2i_watch wallet --account ${{ matrix.account }} 2>/dev/null | grep -oE 'Rs [0-9,]+' | head -1)
+          OUT=$(.venv-ci/bin/python -m i2i_watch wallet --account ${{ matrix.account }} -v 2>&1)
+          echo "$OUT"
+          BAL=$(echo "$OUT" | grep -oE 'Rs [0-9,]+' | head -1)
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
             curl -sS --max-time 20 -X POST \
               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \

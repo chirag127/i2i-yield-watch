@@ -41,7 +41,13 @@ AUTOINVEST_MIN_CREDIT_SCORE: float = _f("AUTOINVEST_MIN_CREDIT_SCORE", 700.0)
 TOPUP_MIN_RATE_PCT: float = _f("TOPUP_MIN_RATE_PCT", 150.0)          # ADD-FUNDS trigger (rate >)
 # Idle-capital watchdog: after this many days with NO qualifying loan, the
 # auto-investor pings Telegram so idle escrow never goes silently unmonitored.
+# IDLE_WATCHDOG_LOUD=1 makes the nudge a loud (buzzing) alert.
 IDLE_WATCHDOG_DAYS: float = _f("IDLE_WATCHDOG_DAYS", 3.0)
+IDLE_WATCHDOG_LOUD: bool = (os.environ.get("IDLE_WATCHDOG_LOUD", "").strip().lower()
+                            in ("1", "true", "yes", "on"))
+# Low-escrow threshold (Rs): the wallet-check ping becomes a LOUD alert when the
+# investable balance drops below this, so a drained escrow is never missed.
+WALLET_ALERT_THRESHOLD: float = _f("WALLET_ALERT_THRESHOLD", 10000.0)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────
 PER_LOAN_CAP: float = _f("PER_LOAN_CAP", 5000.0)             # never exceed per loan

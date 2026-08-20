@@ -1,0 +1,31 @@
+# MegaLinter config — scoped to the languages actually in this repo.
+# The default 'all' flavor pulls a ~2GB image and lints dozens of irrelevant
+# languages; scoping to python + yaml + json + markdown + bash makes every run
+# faster and the noise much lower. See https://megalinter.io for all options.
+
+ENABLE_LINTERS:
+  - PYTHON_BLACK
+  - PYTHON_RUFF
+  - PYTHON_ISORT
+  - PYTHON_PYRIGHT  # type-checking (needs .venv; skipped if unavailable)
+  - YAML_YAMLLINT
+  - YAML_PRETTIER
+  - JSON_PRETTIER
+  - MARKDOWN_MARKDOWNLINT
+  - BASH_SHELLCHECK
+
+DISABLE_LINTERS:
+  - COPYPASTE_JSCPD      # false positives on the dashboard JS bundle
+  - SPELL_CSPELL         # India/loan-specific words trip it constantly
+  - REPOSITORY_TRIVY     # no container/OS scanning needed here
+
+# Auto-fix everything fixable (formatting), then fail only on real errors.
+APPLY_FIXES: all
+FORMATTERS_DISABLE_ERRORS: true
+SHOW_ELAPSED_TIME: true
+FAIL_IF_MISSING_LINTER_IN_FLAVOR: false
+PARALLEL: true
+
+# Don't lint generated/third-party trees.
+FILTER_REGEX_EXCLUDE: >-
+  (data/|\.venv/|\.venv-ci/|node_modules/|uv\.lock|dashboard/app\.js|\.git/)

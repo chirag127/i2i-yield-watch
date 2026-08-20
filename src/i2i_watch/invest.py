@@ -460,6 +460,21 @@ def show_wallet(account: str | None = None) -> int:
         return 1
     wallet = client.wallet()
     print(f"account={acct} investable escrow = Rs {wallet:,.2f}")
+    # Low-escrow alert: when the investable balance drops below the threshold,
+    # the wallet-check Telegram ping becomes a LOUD alert (the wallet-check.yml
+    # cron parses this line) so a drained escrow is never missed.
+    threshold = C.WALLET_ALERT_THRESHOLD
+    if 0 < threshold and wallet < threshold:
+        try:
+            send_telegram_text(
+                "🚨 <b>i2i escrow LOW</b>\n"
+                f"account={acct} investable escrow Rs {wallet:,.0f} is below "
+                f"the Rs {threshold:,.0f} alert threshold.\nFund the escrow before "
+                f"the next qualifying loan appears.",
+                silent=False,
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("failed to send low-escrow Telegram alert")
     return 0
 
 
@@ -489,8 +504,9 @@ def _watchdog_idle(acct: str, credit_gate: float) -> None:
             # First run ever with nothing qualifying — start the clock.
             storage.save_idle_state(now.isoformat().replace("+00:00", "Z"))
             return
-        # Threshold crossed: nudge (once; the stored timestamp keeps it silent
-        # for another window even if the next runs also find nothing).
+        # Threshold crossed: nudge (once; the stored timestamp keeps it quiet
+        # for another window even if the next runs also find nothing). Silent by
+        # default; IDLE_WATCHDOG_LOUD=1 makes it a buzzing alert.
         try:
             send_telegram_text(
                 "⏳ <b>i2i auto-invest: market idle</b>\n"
@@ -498,7 +514,7 @@ def _watchdog_idle(acct: str, credit_gate: float) -> None:
                 f"for {days:.0f}+ days.\nYour escrow is sitting idle — either the "
                 f"market is quiet or the gates are too strict.\n"
                 f"account={acct}",
-                silent=True,
+                silent=not C.IDLE_WATCHDOG_LOUD,
             )
         except Exception:  # noqa: BLE001
             log.warning("failed to send idle-watchdog Telegram nudge")
@@ -539,6 +555,22 @@ def portfolio_digest(account: str | None = None) -> int:
             client = I2iClient.from_env(acct)
             wallet = client.wallet()
             invested = len(storage.load_invested(account=acct))
+            # P&L from the lending overview (best-effort; wallet-only if the
+            # endpoint is unreachable)
+            overview = client._overview_amounts(client.lending_overview())
+            pnl = ""
+            if overview.get("totalLent") or overview.get("interestReceived") \
+                    or overview.get("totalPending"):
+                parts = [f"lent Rs {overview['totalLent']:,.0f}"]
+                if overview.get("interestReceived"):
+                    parts.append(f"interest recv Rs {overview['interestReceived']:,.0f}")
+                if overview.get("totalPending"):
+                    parts.append(f"pending Rs {overview['totalPending']:,.0f}")
+                if overview.get("avgRate"):
+                    parts.append(f"avg {overview['avgRate']:.0f}%")
+                if overview.get("borrowers"):
+                    parts.append(f"{overview['borrowers']:.0f} borrowers")
+                pnl = " | " + " · ".join(parts)
             # near-miss count from the live market (rate ok, credit too low)
             from .sources.i2i import fetch_all_loans
             loans = fetch_all_loans()
@@ -547,7 +579,7 @@ def portfolio_digest(account: str | None = None) -> int:
             misses = len(credit_near_misses(loans, rate, credit))
             lines.append(
                 f"• <b>{acct}</b>: escrow Rs {wallet:,.0f} | {invested} loan(s) invested "
-                f"| {len(loans)} open | {misses} near-miss (rate ok, credit low)"
+                f"| {len(loans)} open | {misses} near-miss (rate ok, credit low){pnl}"
             )
         except SystemExit as e:  # no auth
             lines.append(f"• <b>{acct}</b>: no auth — {e}")

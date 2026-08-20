@@ -161,6 +161,8 @@ gets first pick of every qualifying loan. Both accounts gate at **>110%**
 | `AUTOINVEST_MIN_RATE_PCT` | `110` | **Auto-invest gate** — place real money only on rate **>** this |
 | `AUTOINVEST_MIN_CREDIT_SCORE` | `700` | **Credit gate** — skip loans with score **<** this (no-score loans are imputed 700 and pass) |
 | `IDLE_WATCHDOG_DAYS` | `3` | After this many days with no qualifying loan, send a silent Telegram nudge |
+| `IDLE_WATCHDOG_LOUD` | `false` | Make the idle nudge a loud (buzzing) alert |
+| `WALLET_ALERT_THRESHOLD` | `10000` | Below this Rs investable escrow, the wallet-check ping becomes a LOUD alert |
 | `PER_LOAN_CAP` | `5000` | Max ₹ placed in one loan |
 | `INVEST_MIN_AMOUNT` | `1000` | Min ₹ per investment (skip below) |
 | `I2I_EMAIL` / `I2I_PASSWORD` | — | Login creds (password AES-encrypted client-side) — **primary** auth (default account) |
@@ -239,6 +241,8 @@ data/                git-as-DB state (committed by CI)
 .github/workflows/invest.yml        REAL-MONEY auto-invest (chirag then neeru)
 .github/workflows/wallet-check.yml  Daily investable-escrow Telegram ping
 .github/workflows/digest.yml        Weekly portfolio summary to Telegram
+
+scripts/dispatch_tick.sh            Fire a repository_dispatch tick (cron pinger)
 ```
 
 ## Reliability: external cron pinger (optional)
@@ -251,7 +255,7 @@ so you can get TRUE sub-15-min polling from a free external pinger:
 1. Create a fine-grained PAT (`repo` → `actions: write`) and store it as the
    `I2I_DISPATCH_TOKEN` secret.
 2. On [cron-job.org](https://cron-job.org) (or healthchecks.io), make a job
-   every 5 minutes that POSTs:
+   every 5 minutes that POSTs (or point it at `scripts/dispatch_tick.sh`):
    ```bash
    curl -X POST https://api.github.com/repos/chirag127/i2i-yield-watch/dispatches \
      -H "Authorization: Bearer $I2I_DISPATCH_TOKEN" \
@@ -259,7 +263,8 @@ so you can get TRUE sub-15-min polling from a free external pinger:
      -d '{"event_type":"tick"}'
    ```
    Each ping fires a scrape run; the self-loop + per-run dedup make it
-   idempotent, so a late/duplicate ping is harmless.
+   idempotent, so a late/duplicate ping is harmless. `scripts/dispatch_tick.sh`
+   wraps this exact call (reads `I2I_DISPATCH_TOKEN`).
 
 ---
 

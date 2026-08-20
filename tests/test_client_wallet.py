@@ -93,3 +93,36 @@ def test_show_wallet_prints_real_investable(monkeypatch, capsys):
     monkeypatch.setattr("i2i_watch.invest.I2iClient", _Fake)
     assert show_wallet("chirag") == 0
     assert "investable escrow = Rs 22,000.00" in capsys.readouterr().out
+
+
+def test_lending_overview_parses_common_field_names():
+    c = _client({"data": {
+        "totalAmountLent": 661140.0,
+        "totalNoBorrowers": 166,
+        "averageInterestRate": 110.03,
+        "interestReceived": 6042.52,
+        "principalReceived": 233317.12,
+        "totalAmountPending": 508223.82,
+        "expectedTotalInterestIncome": 86443.46,
+    }})
+    ov = c._overview_amounts(c.lending_overview())
+    assert ov["totalLent"] == pytest.approx(661140.0)
+    assert ov["borrowers"] == pytest.approx(166.0)
+    assert ov["interestReceived"] == pytest.approx(6042.52)
+    assert ov["totalPending"] == pytest.approx(508223.82)
+    assert ov["avgRate"] == pytest.approx(110.03)
+
+
+def test_lending_overview_empty_when_no_endpoint_responds():
+    c = I2iClient("csrf", "sid")
+
+    def _get(host, path, **kw):
+        raise ConnectionError("no overview endpoint (test)")
+
+    c._get = _get  # type: ignore[method-assign]
+    assert c.lending_overview() == {}
+    assert c._overview_amounts({}) == {
+        "totalLent": 0.0, "interestReceived": 0.0, "principalReceived": 0.0,
+        "totalPending": 0.0, "interestPending": 0.0, "borrowers": 0.0,
+        "avgRate": 0.0, "expectedInterest": 0.0,
+    }

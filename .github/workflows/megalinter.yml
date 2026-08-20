@@ -9,8 +9,10 @@ on:
     branches: [main, master]
 
 env:
-  # Use cupcake flavor (most common languages, ~700MB vs 2GB full)
-  MEGALINTER_FLAVOR: all
+  # python flavor (~600MB) — .megalinter.yml scopes linters to the repo's
+  # actual languages (python/yaml/json/markdown/bash). The old `all` flavor
+  # pulled a ~2GB image for dozens of irrelevant languages.
+  MEGALINTER_FLAVOR: python
   # Auto-fix all fixable issues
   APPLY_FIXES: all
   APPLY_FIXES_EVENT: push
