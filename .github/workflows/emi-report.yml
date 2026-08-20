@@ -87,10 +87,13 @@ jobs:
           cp ../snapshots/emi-chirag/emi-chirag.json data/ 2>/dev/null || true
           cp ../snapshots/emi-neeru/emi-neeru.json data/ 2>/dev/null || true
           ls -la data/
-          if git diff --quiet; then
+          # Stage FIRST — `git diff` ignores untracked files, so a fresh
+          # snapshot would look like 'no change' and never be committed
+          # (observed 2026-08-20: run green but nothing pushed).
+          git add data/
+          if git diff --cached --quiet; then
             echo "no change to push"
           else
-            git add data/
             git commit -m "data: i2i EMI-status snapshot $(date -u +'%F %H:%MZ')"
             git remote set-url origin "https://x-access-token:${I2I_DATA_PAT}@github.com/chirag127/i2i-funding-data.git"
             git push origin main

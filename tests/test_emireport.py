@@ -60,6 +60,45 @@ def test_normalize_loan_maps_common_field_names():
     assert ln["raw"] is row  # original row is preserved
 
 
+def test_normalize_loan_live_field_names():
+    # LIVE row schema (probe 2026-08-20): totalAmountRec / totalAmountPen /
+    # totalPrincipalPen / totalIntPen / loanInt / loanCat / loanDisbDate /
+    # delayedDays / currentStatus / paidEMI / unpaidEMI / loanAmount
+    row = {
+        "name": "Mohd Anas",
+        "loanId": 1363676,
+        "loanAmount": 1000.0,
+        "totalAmountRec": 798.91,
+        "totalAmountPen": 400.14,
+        "totalPrincipalPen": 233.25,
+        "totalIntPen": 166.89,
+        "loanInt": 76.4,
+        "loanCat": "X",
+        "loanDisbDate": 1777919400,
+        "tenure": 5,
+        "lastPaymentDate": "2026-08-17",
+        "currentStatus": "Delayed",
+        "delayedDays": 76,
+        "paidEMI": 0,
+        "unpaidEMI": 5,
+        "emiAmount": 239.76,
+    }
+    ln = normalize_loan(row)
+    assert ln["borrowerName"] == "Mohd Anas"
+    assert ln["amountInvested"] == pytest.approx(1000.0)
+    assert ln["amountReceived"] == pytest.approx(798.91)
+    assert ln["principalPending"] == pytest.approx(233.25)
+    assert ln["interestPending"] == pytest.approx(166.89)
+    assert ln["totalPending"] == pytest.approx(400.14)  # direct field wins
+    assert ln["rate"] == pytest.approx(76.4)
+    assert ln["riskCategory"] == "X"
+    assert ln["delayDays"] == pytest.approx(76.0)
+    assert ln["emiPaid"] == pytest.approx(0.0)
+    assert ln["emiPending"] == pytest.approx(5.0)
+    assert is_defaulted(ln)
+    assert delay_bucket(ln["delayDays"]) == "30to90"
+
+
 def test_normalize_loan_total_pending_taken_directly_when_present():
     ln = normalize_loan({"loanId": 1, "totalAmountPending": 800.0})
     assert ln["totalPending"] == pytest.approx(800.0)
@@ -145,35 +184,54 @@ def test_aggregates_unknown_bucket_for_delayed_without_days():
 
 
 # ── client: paged emi_loans ──────────────────────────────────────────────────
-def _client_with_pages(pages: list[list[dict]], totals: list[int]) -> I2iClient:
+def _client_with_pages(pages: list[list[dict]], totals: list[int],
+                       grand_total: int | None = None) -> I2iClient:
+    # `totals` are the PER-PAGE `total` values; `grand_total` is the response's
+    # totalRows (mirrors the live API: total=10 per page, totalRows=174 grand
+    # total). Default: grand total = sum of all page rows.
     c = I2iClient("csrf", "sid")
     calls: list[dict] = []
+    if grand_total is None:
+        grand_total = sum(len(p) for p in pages)
 
     def _post(host: str, path: str, body: dict, **kw):
         calls.append(body)
         idx = len(calls) - 1
-        return {"body": pages[idx], "total": totals[idx]}
+        return {"body": pages[idx], "total": totals[idx], "totalRows": grand_total}
 
     c._post = _post  # type: ignore[method-assign]
     c._calls = calls  # type: ignore[attr-defined]
     return c
 
 
-def test_emi_loans_paginates_until_total():
+def test_emi_loans_paginates_until_grand_total():
+    # LIVE-VERIFIED: response `total` is the PER-PAGE count (10) while
+    # `totalRows` is the grand total (174). Pagination MUST use totalRows —
+    # using `total` capped the book at page 1 (~95% of loans dropped).
     p1 = [{"loanId": 1, "borrowerName": "A"}, {"loanId": 2, "borrowerName": "B"}]
-    p2 = [{"loanId": 3, "borrowerName": "C"}]
-    c = _client_with_pages([p1, p2], [3, 3])
+    p2 = [{"loanId": 3, "borrowerName": "C"}, {"loanId": 4, "borrowerName": "D"}]
+    p3 = [{"loanId": 5, "borrowerName": "E"}]
+    c = _client_with_pages([p1, p2, p3], [2, 2, 1], grand_total=5)
     rows = c.emi_loans(limit=2)
-    assert [r["loanId"] for r in rows] == [1, 2, 3]
-    # skip advances by limit
+    assert [r["loanId"] for r in rows] == [1, 2, 3, 4, 5]
     assert c._calls[0]["skip"] == 0
     assert c._calls[1]["skip"] == 2
+    assert c._calls[2]["skip"] == 4
+
+
+def test_emi_loans_stops_at_grand_total_even_with_full_pages():
+    # totalRows = 4 but every page is full (10) — must stop at 4 rows, not
+    # keep fetching (the old `total` bug would have stopped at 10 = one page)
+    p1 = [{"loanId": 1}, {"loanId": 2}, {"loanId": 3}, {"loanId": 4}]
+    c = _client_with_pages([p1], [10], grand_total=4)
+    rows = c.emi_loans(limit=10)
+    assert [r["loanId"] for r in rows] == [1, 2, 3, 4]
 
 
 def test_emi_loans_dedupes_across_pages():
     p1 = [{"loanId": 1}, {"loanId": 2}]
     p2 = [{"loanId": 2}, {"loanId": 3}]
-    c = _client_with_pages([p1, p2], [3, 3])
+    c = _client_with_pages([p1, p2], [3, 3], grand_total=3)
     rows = c.emi_loans(limit=2)
     assert [r["loanId"] for r in rows] == [1, 2, 3]
 

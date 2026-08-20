@@ -38,25 +38,26 @@ LOAN_ID_KEYS = ("loanId", "pl_bloan_id", "bloan_id", "id")
 BORROWER_NAME_KEYS = ("borrowerName", "bname", "name", "userName", "usr_name")
 AMOUNT_INVESTED_KEYS = ("totalInvestment", "investedAmount", "amountInvested",
                         "totalInvestedAmount", "loanAmount", "pl_amt")
-AMOUNT_RECEIVED_KEYS = ("totalReceived", "receivedAmount", "amountReceived",
-                        "totalAmountReceived", "principalRec")
-PRINCIPAL_PENDING_KEYS = ("totalPriPen", "principalPending", "principalPendingAmount",
-                          "totalPrincipalPending", "pendingPrincipal")
+AMOUNT_RECEIVED_KEYS = ("totalAmountRec", "totalReceived", "receivedAmount",
+                        "amountReceived", "totalAmountReceived", "principalRec")
+PRINCIPAL_PENDING_KEYS = ("totalPrincipalPen", "totalPriPen", "principalPending",
+                          "principalPendingAmount", "totalPrincipalPending",
+                          "pendingPrincipal")
 INTEREST_PENDING_KEYS = ("totalIntPen", "interestPending", "interestPendingAmount",
                          "totalInterestPending", "pendingInterest")
-TOTAL_PENDING_KEYS = ("totalPending", "totalAmountPending", "amountPending",
-                      "pendingAmount", "remainingAmount")
+TOTAL_PENDING_KEYS = ("totalAmountPen", "totalPending", "totalAmountPending",
+                      "amountPending", "pendingAmount", "remainingAmount")
 LAST_PAYMENT_KEYS = ("lastPaymentDate", "lastPaymentReceivedDate", "lastRecDate",
-                     "lastPaymentRecDate")
-RATE_KEYS = ("interestRate", "rate", "pl_current_rate", "avgIntRate")
-DISBURSAL_KEYS = ("disbursalDate", "disDate", "loanDisbursalDate")
+                     "lastPaymentRecDate", "lastPaymentDate1")
+RATE_KEYS = ("loanInt", "interestRate", "rate", "pl_current_rate", "avgIntRate")
+DISBURSAL_KEYS = ("loanDisbDate", "disbursalDate", "disDate", "loanDisbursalDate")
 TENURE_KEYS = ("tenure", "bloan_tenure")
-RISK_KEYS = ("riskCategory", "bloan_i2i_category", "category")
-STATUS_KEYS = ("currentStatus", "emiStatus", "status", "loanStatus")
-DELAY_DAYS_KEYS = ("delayDays", "delayedDays", "daysDelayed", "noOfDaysDelayed",
+RISK_KEYS = ("loanCat", "riskCategory", "bloan_i2i_category", "category")
+STATUS_KEYS = ("currentStatus", "loanStatus", "emiStatus", "status")
+DELAY_DAYS_KEYS = ("delayedDays", "delayDays", "daysDelayed", "noOfDaysDelayed",
                    "overdueDays", "daysOverdue", "pendingDays")
-EMI_PAID_KEYS = ("EMIPaid", "emiPaid", "emiReceived")
-EMI_PENDING_KEYS = ("EMIPending", "emiPending", "emiPendingAmount")
+EMI_PAID_KEYS = ("paidEMI", "EMIPaid", "emiPaid", "emiReceived")
+EMI_PENDING_KEYS = ("unpaidEMI", "EMIPending", "emiPending", "emiPendingAmount")
 
 
 def _first(d: dict, keys: tuple[str, ...], default=None):

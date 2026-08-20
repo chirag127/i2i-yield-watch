@@ -317,14 +317,19 @@ class I2iClient:
 
     def emi_loans(self, limit: int = 10, max_pages: int = 500) -> list[dict]:
         """Every loan row the EMI-status page shows, paged via
-        loanDetailBorrowerWiseInDetail (POST). The SPA filter body is
+        loanDetailBorrowerWiseInDetail (POST). LIVE-VERIFIED pagination (probe
+        2026-08-20): the response's `total` is the PER-PAGE count (10) while
+        `totalRows` is the grand total — pagination must run until `totalRows`
+        (or a short/empty page), NOT `total` (which capped the book at page 1
+        and silently dropped ~95% of loans). The SPA filter body is
         {categories, employmentTypes, isFilterApply, currentStatus,
         disStartDate, disEndDate, name, loanId, skip, limit, searchValue};
-        empty filters return the full book. Stops on a short/empty page.
-        Each raw row is kept (borrower name, loan id, amounts, EMI status) so
-        the caller can compute per-loan + aggregate default numbers."""
+        empty filters return the full book. Each raw row is kept (borrower
+        name, loan id, amounts, EMI status, delayedDays) so the caller can
+        compute per-loan + aggregate default numbers."""
         rows: list[dict] = []
         seen: set[str] = set()
+        grand_total: int | None = None
         for pg in range(max_pages):
             body = {
                 "categories": [], "employmentTypes": [], "isFilterApply": False,
@@ -332,12 +337,14 @@ class I2iClient:
                 "name": "", "loanId": "",
                 "skip": pg * limit, "limit": limit, "searchValue": "",
             }
-            d = self._post(C.API_BASE, "investor/loanDetailBorrowerWiseInDetail?isFilterApply=",
+            d = self._post(C.API_BASE, "investor/loanDetailBorrowerWiseInDetail",
                            body, no_retry=True)
             if not isinstance(d, dict):
                 break
             page = d.get("body", []) if isinstance(d.get("body"), list) else []
-            total = d.get("total")
+            total_rows = d.get("totalRows")
+            if total_rows not in (None, 0):
+                grand_total = int(total_rows)
             if not page:
                 break
             for r in page:
@@ -345,11 +352,12 @@ class I2iClient:
                 if rid and rid not in seen:
                     seen.add(rid)
                     rows.append(r)
-            if total is not None and len(seen) >= int(total):
+            if grand_total is not None and len(seen) >= grand_total:
                 break
             if len(page) < limit:
                 break
-        log.info("emi_loans: %d loan rows (host %s)", len(rows), C.API_BASE)
+        log.info("emi_loans: %d loan rows of grand total %s (host %s)",
+                 len(rows), grand_total, C.API_BASE)
         return rows
 
     def emi_loan_status(self, loan_id: object) -> dict:
