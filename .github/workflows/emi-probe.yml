@@ -1,0 +1,67 @@
+name: EMI Probe (temp)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Setup toolchain
+        uses: ./.github/actions/setup-i2i
+        with:
+          extras: ''
+      - name: Probe loanDetailBorrowerWiseInDetail
+        env:
+          PYTHONIOENCODING: utf-8
+          I2I_ACCOUNT: chirag
+          I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
+          I2I_PASSWORD: ${{ secrets.I2I_PASSWORD }}
+          I2I_CSRF_TOKEN: ${{ secrets.I2I_CSRF_TOKEN }}
+          I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
+        run: |
+          .venv-ci/bin/python - <<'PYEOF'
+          import json, urllib.request, urllib.parse
+          from i2i_watch.client import I2iClient
+          from i2i_watch.auth import browser_headers
+          c = I2iClient.from_env("chirag")
+          base = "https://apiv1.i2ifunding.com/investor/loanDetailBorrowerWiseInDetail"
+          def post(qs, body):
+              url = f"{base}?{qs}&csrf_token={c.csrf}&session_id={c.sid}"
+              req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                           method="POST", headers=browser_headers())
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return json.loads(r.read())
+          body = {"categories": [], "employmentTypes": [], "isFilterApply": True,
+                  "currentStatus": "'Advanced','On Time','Delayed'",
+                  "disStartDate": "2025-08-20", "disEndDate": "2026-08-20",
+                  "name": "", "loanId": "", "skip": 0, "limit": 10, "searchValue": ""}
+          # attempt 1: SPA-style query string
+          for label, qs in [
+              ("SPA-style full qs", "isFilterApply=true&loanStatus='Advanced','On Time','Delayed'&product=&emp=&category=&startDate=2025-08-20&endDate=2026-08-20"),
+              ("bare isFilterApply", "isFilterApply="),
+              ("empty qs", ""),
+          ]:
+              try:
+                  d = post(qs, body)
+                  rows = d.get("body") if isinstance(d, dict) else None
+                  print("=== " + label + " ===")
+                  print("keys:", sorted(d.keys()) if isinstance(d, dict) else type(d))
+                  print("total:", d.get("total"), "| totalRows:", d.get("totalRows"), "| rows:", len(rows) if isinstance(rows, list) else rows)
+                  if isinstance(rows, list) and rows:
+                      print("first row:", json.dumps(rows[0], indent=1)[:1500])
+              except Exception as e:
+                  print("=== " + label + " FAILED:", e)
+          # attempt 2: page 2 with SPA qs
+          try:
+              body2 = dict(body, skip=10)
+              d = post("isFilterApply=true&loanStatus='Advanced','On Time','Delayed'&product=&emp=&category=&startDate=2025-08-20&endDate=2026-08-20", body2)
+              rows = d.get("body")
+              print("=== page2 rows:", len(rows) if isinstance(rows, list) else rows, "| total:", d.get("total"), "| totalRows:", d.get("totalRows"))
+          except Exception as e:
+              print("page2 FAILED:", e)
+          PYEOF
