@@ -113,6 +113,25 @@ def test_lending_overview_parses_common_field_names():
     assert ov["avgRate"] == pytest.approx(110.03)
 
 
+def test_lending_overview_parses_live_investor_overview_fields():
+    # LIVE-verified field set (2026-08-20): investor/overview returns
+    # avgROI / totalAmountInvested / totalEMI / totalInterestIncome /
+    # totalNumOfBorrowers / xirr — the digest must map these too.
+    c = _client({"data": {
+        "avgROI": 18.4,
+        "totalAmountInvested": 661140.0,
+        "totalEMI": 181540.88,
+        "totalInterestIncome": 86443.46,
+        "totalNumOfBorrowers": 166,
+        "xirr": 21.1,
+    }})
+    ov = c._overview_amounts(c.lending_overview())
+    assert ov["totalLent"] == pytest.approx(661140.0)
+    assert ov["borrowers"] == pytest.approx(166.0)
+    assert ov["interestReceived"] == pytest.approx(86443.46)
+    assert ov["avgRate"] == pytest.approx(18.4)
+
+
 def test_lending_overview_empty_when_no_endpoint_responds():
     c = I2iClient("csrf", "sid")
 

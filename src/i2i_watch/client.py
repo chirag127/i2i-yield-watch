@@ -321,16 +321,17 @@ class I2iClient:
             return 0.0
 
         total_lent = pick("totalAmountLent", "totalLentAmount", "amountLent",
-                          "totalInvestedAmount", "totalPrincipalInvested")
+                          "totalInvestedAmount", "totalPrincipalInvested",
+                          "totalAmountInvested")
         interest_recv = pick("interestReceived", "interestEarned", "totalInterestReceived",
-                             "interestReceivedAmount")
+                             "interestReceivedAmount", "totalInterestIncome")
         principal_recv = pick("principalReceived", "principalReceivedAmount",
                               "totalPrincipalReceived")
         pending = pick("totalAmountPending", "amountPending", "totalPendingAmount")
         interest_pending = pick("interestPending", "pendingInterest", "interestPendingAmount")
         borrowers = pick("totalNoBorrowers", "totalBorrowers", "noOfBorrowers",
-                         "borrowerCount")
-        avg_rate = pick("averageInterestRate", "avgInterestRate", "averageRate")
+                         "borrowerCount", "totalNumOfBorrowers")
+        avg_rate = pick("averageInterestRate", "avgInterestRate", "averageRate", "avgROI")
         expected_interest = pick("expectedTotalInterestIncome", "expectedInterestIncome",
                                  "totalExpectedInterest", "expectedInterest")
         return {
