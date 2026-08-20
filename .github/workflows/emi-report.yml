@@ -1,0 +1,111 @@
+name: i2i EMI-Status Report
+
+# Fetches the investor EMI-status / default analytics (the same data the SPA's
+# investoraccount/emistatus page shows) for EVERY account and pushes the JSON
+# snapshots to the PRIVATE data repo chirag127/i2i-funding-data.
+#
+#   source:   i2i-yield-watch (has the login secrets)
+#   output:   chirag127/i2i-funding-data  <- data/emi-<account>.json
+#
+# REQUIRED SECRET on i2i-yield-watch:
+#   I2I_DATA_PAT — a PAT with `repo` scope (or a fine-grained token with
+#   Contents:Read+Write on chirag127/i2i-funding-data only). Used ONLY for the
+#   cross-repo push; the fetch itself uses the existing I2I_* secrets.
+#   Set it with:  gh secret set I2I_DATA_PAT --repo chirag127/i2i-yield-watch
+#   (values via stdin, never on the command line)
+
+on:
+  schedule:
+    # Daily 08:00 UTC (13:30 IST) — plus any manual dispatch.
+    - cron: "0 8 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        account: [chirag, neeru]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Setup toolchain (cached venv, direct-HTTP only)
+        uses: ./.github/actions/setup-i2i
+        with:
+          extras: ''
+      - name: Fetch EMI-status report — ${{ matrix.account }}
+        env:
+          PYTHONIOENCODING: utf-8
+          I2I_ACCOUNT: ${{ matrix.account }}
+          # chirag (default account) — legacy unprefixed names
+          I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
+          I2I_PASSWORD: ${{ secrets.I2I_PASSWORD }}
+          I2I_CSRF_TOKEN: ${{ secrets.I2I_CSRF_TOKEN }}
+          I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
+          # neeru (secondary account) — namespaced I2I_NEERU_* names
+          I2I_NEERU_EMAIL: ${{ secrets.I2I_NEERU_EMAIL }}
+          I2I_NEERU_PASSWORD: ${{ secrets.I2I_NEERU_PASSWORD }}
+          I2I_NEERU_CSRF_TOKEN: ${{ secrets.I2I_NEERU_CSRF_TOKEN }}
+          I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
+        run: .venv-ci/bin/python -m i2i_watch emireport --account ${{ matrix.account }}
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: emi-${{ matrix.account }}
+          path: data/emi-${{ matrix.account }}.json
+          if-no-files-found: error
+
+  push:
+    needs: fetch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: snapshots
+      - name: Clone private data repo
+        env:
+          I2I_DATA_PAT: ${{ secrets.I2I_DATA_PAT }}
+        run: |
+          [ -n "$I2I_DATA_PAT" ] || { echo "I2I_DATA_PAT secret not set — cannot push"; exit 1; }
+          git clone "https://x-access-token:${I2I_DATA_PAT}@github.com/chirag127/i2i-funding-data.git" data-repo
+          cd data-repo
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Commit EMI snapshots
+        env:
+          I2I_DATA_PAT: ${{ secrets.I2I_DATA_PAT }}
+        run: |
+          cd data-repo
+          mkdir -p data
+          cp ../snapshots/emi-chirag/emi-chirag.json data/ 2>/dev/null || true
+          cp ../snapshots/emi-neeru/emi-neeru.json data/ 2>/dev/null || true
+          ls -la data/
+          if git diff --quiet; then
+            echo "no change to push"
+          else
+            git add data/
+            git commit -m "data: i2i EMI-status snapshot $(date -u +'%F %H:%MZ')"
+            git remote set-url origin "https://x-access-token:${I2I_DATA_PAT}@github.com/chirag127/i2i-funding-data.git"
+            git push origin main
+          fi
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip"; exit 0; }
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          curl -sS --max-time 20 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML \
+            -d "text=⚠️ <b>i2i EMI-report run FAILED</b>%0A${RUN_URL}" >/dev/null \
+            && echo "failure alert sent" || echo "failure alert send failed"

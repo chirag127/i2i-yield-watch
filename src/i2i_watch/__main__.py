@@ -9,6 +9,7 @@ Subcommands:
   wallet                     print the real investable escrow balance
   config                     print the EFFECTIVE gates (env -> account -> default)
   digest                     portfolio summary to Telegram (silent, no money)
+  emireport                  EMI-status / default analytics snapshot to JSON
 """
 
 from __future__ import annotations
@@ -58,6 +59,13 @@ def _cmd_digest(args) -> int:
     return portfolio_digest(account=args.account)
 
 
+def _cmd_emireport(args) -> int:
+    from .emireport import run as emireport_run
+
+    return emireport_run(account=args.account, out_path=args.out)
+
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="i2i_watch", description="i2iFunding high-yield loan watch")
     p.add_argument("--iterations", type=int, default=1, help="self-loop count")
@@ -92,6 +100,10 @@ def main(argv: list[str] | None = None) -> int:
     pd = sub.add_parser("digest", help="portfolio summary to Telegram (silent, no money)")
     pd.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
     pd.add_argument("-v", "--verbose", action="store_true")
+    pe = sub.add_parser("emireport", help="EMI-status / default analytics snapshot to JSON (read-only)")
+    pe.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
+    pe.add_argument("--out", default=None, help="output JSON path (default: data/emi-<account>.json)")
+    pe.add_argument("-v", "--verbose", action="store_true")
 
     args = p.parse_args(argv)
     configure_logging(getattr(args, "verbose", False))
@@ -108,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_config(args)
     if args.cmd == "digest":
         return _cmd_digest(args)
+    if args.cmd == "emireport":
+        return _cmd_emireport(args)
 
     # default: scrape/monitor loop
     if args.reset_notify_state:

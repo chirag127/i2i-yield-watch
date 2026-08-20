@@ -83,7 +83,12 @@ class I2iClient:
         )
 
     def _url(self, host: str, path: str) -> str:
+        """Auth'd URL. Paths may already carry a query string (the EMI-status
+        endpoints take ?isFilterApply=) — in that case the auth params are
+        appended with '&', otherwise a fresh '?{auth}' is used."""
         q = urllib.parse.urlencode({"csrf_token": self.csrf, "session_id": self.sid})
+        if "?" in path:
+            return f"{host}/{path}&{q}"
         return f"{host}/{path}?{q}"
 
     def _get(self, host: str, path: str, timeout: int = 40) -> dict:
@@ -286,6 +291,87 @@ class I2iClient:
         """GET apiv1.i2ifunding.com/investor/bank/escrowDetails — the nodal
         account (NEFT/IMPS/RTGS) details shown on the escrow screen."""
         return self._get(C.API_BASE, "investor/bank/escrowDetails")
+
+    # ── EMI-status / portfolio health (read-only) ────────────────────────────
+    # Endpoint + filter shapes reverse-engineered from the SPA (investoraccount/
+    # emistatus page): getEMIStatusOverview (monthly repayment list + loan
+    # counts), getEMIStatusOverviewInDetail (delayed buckets + pending splits),
+    # loanDetailBorrowerWiseInDetail (paged per-loan rows), emi/loanEMIStatus/
+    # {id} (per-loan EMI status), getDelayedLoanStatus (delayed overview).
+    def emi_status_overview(self) -> dict:
+        """Aggregate EMI-status overview: loan counts, total invested, average
+        rates + the monthly repayment schedule. Returns the response body dict
+        (keys logged once so field discovery stays cheap)."""
+        d = self._get(C.API_BASE, "investor/getEMIStatusOverview?isFilterApply=")
+        if isinstance(d, dict) and "body" in d:
+            return d
+        return {}
+
+    def emi_status_detail(self) -> dict:
+        """Detailed aggregate: on-time/delayed counts, delayed buckets
+        (<30 / 30-90 / >90 days) and principal/interest received-vs-pending."""
+        d = self._get(C.API_BASE, "investor/getEMIStatusOverviewInDetail?isFilterApply=")
+        if isinstance(d, dict) and "body" in d:
+            return d
+        return {}
+
+    def emi_loans(self, limit: int = 10, max_pages: int = 500) -> list[dict]:
+        """Every loan row the EMI-status page shows, paged via
+        loanDetailBorrowerWiseInDetail (POST). The SPA filter body is
+        {categories, employmentTypes, isFilterApply, currentStatus,
+        disStartDate, disEndDate, name, loanId, skip, limit, searchValue};
+        empty filters return the full book. Stops on a short/empty page.
+        Each raw row is kept (borrower name, loan id, amounts, EMI status) so
+        the caller can compute per-loan + aggregate default numbers."""
+        rows: list[dict] = []
+        seen: set[str] = set()
+        for pg in range(max_pages):
+            body = {
+                "categories": [], "employmentTypes": [], "isFilterApply": False,
+                "currentStatus": "", "disStartDate": "", "disEndDate": "",
+                "name": "", "loanId": "",
+                "skip": pg * limit, "limit": limit, "searchValue": "",
+            }
+            d = self._post(C.API_BASE, "investor/loanDetailBorrowerWiseInDetail?isFilterApply=",
+                           body, no_retry=True)
+            if not isinstance(d, dict):
+                break
+            page = d.get("body", []) if isinstance(d.get("body"), list) else []
+            total = d.get("total")
+            if not page:
+                break
+            for r in page:
+                rid = str(r.get("loanId") or r.get("pl_bloan_id") or r.get("bloan_id") or "")
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    rows.append(r)
+            if total is not None and len(seen) >= int(total):
+                break
+            if len(page) < limit:
+                break
+        log.info("emi_loans: %d loan rows (host %s)", len(rows), C.API_BASE)
+        return rows
+
+    def emi_loan_status(self, loan_id: object) -> dict:
+        """Per-loan EMI status detail (delayed days, paid/pending per loan).
+        Best-effort: returns {} on any failure — the caller keeps going."""
+        try:
+            d = self._get(C.API_BASE, f"investor/emi/loanEMIStatus/{loan_id}")
+            if isinstance(d, dict):
+                return d
+        except Exception:  # noqa: BLE001
+            pass
+        return {}
+
+    def delayed_loan_status(self) -> dict:
+        """Delayed-loan overview (the 'denial mode' time buckets). Best-effort."""
+        try:
+            d = self._get(C.API_BASE, "investor/getDelayedLoanStatus?isFilterApply=")
+            if isinstance(d, dict):
+                return d
+        except Exception:  # noqa: BLE001
+            pass
+        return {}
 
     def lending_overview(self) -> dict:
         """BEST-EFFORT lending summary (total lent, interest received/pending,
