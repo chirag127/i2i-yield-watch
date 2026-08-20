@@ -64,6 +64,27 @@ jobs:
       - name: Run tests
         run: .venv-ci/bin/python -m pytest -q
 
+      # PRE-FLIGHT GUARD: git-crypt refuses to unlock a modified tree (observed
+      # 2026-08-20 — the e2e invest test wrote data/invest-idle.json into the
+      # checkout and silently killed 3 scrape runs at the unlock step). Fail
+      # here with a clear message instead of dying inside git-crypt, and keep
+      # the failure visible on the step that caused it. Tests isolate storage
+      # via tests/conftest.py; anything else that dirties the checkout is a
+      # regression that must surface in CI, not a silent scrape killer.
+      - name: Pre-flight — checkout must be clean before git-crypt unlock
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Checkout is dirty before git-crypt unlock. git-crypt refuses to unlock a modified tree, so this run cannot proceed."
+            echo "Dirty files:"
+            git status --porcelain
+            echo ""
+            echo "Likely cause: a step above (usually the test suite) wrote files into the checkout."
+            echo "Fix: isolate that write (see tests/conftest.py, which redirects storage to a temp dir),"
+            echo "then re-run ci — the same regression must fail there too."
+            exit 1
+          fi
+          echo "checkout clean — safe to unlock git-crypt"
+
       - name: Unlock git-crypt
         uses: flydiverny/setup-git-crypt@v5
 
