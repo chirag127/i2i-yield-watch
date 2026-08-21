@@ -177,6 +177,7 @@ jobs:
           AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
           AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}
           I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '100' }}
+          I2I_NEERU_AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_CREDIT_SCORE || vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}
         run: .venv-ci/bin/python -m i2i_watch invest --live --account neeru -v
       - name: Commit invested-loans state (git-as-DB) — neeru
         run: |

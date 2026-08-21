@@ -75,6 +75,16 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     fresh = transform_loans(raw)
     log.info("transformed %d loans", len(fresh))
 
+    # A zero-row snapshot is not a valid market state: it usually means an auth,
+    # API, parser, or browser regression. Never archive the entire active book
+    # or reset notification state on that signal. Fail before any persistence so
+    # the workflow's failure alert fires and the next run can recover.
+    if len(fresh) < max(1, C.LISTING_MIN_ROWS):
+        raise RuntimeError(
+            f"market snapshot contained {len(fresh)} loan rows; refusing to "
+            "overwrite active state with an empty/invalid listing"
+        )
+
     existing = storage.load_active_loans()
     notified = storage.load_notifications_sent()
 

@@ -42,7 +42,7 @@ WEIGHTS = {
 
 def imputed_credit(loan: dict) -> float:
     """Borrower credit score for RANKING: the real 300-900 score, or the imputed
-    NO_CREDIT_IMPUTED_SCORE (700, high-risk band) when there is no score."""
+    NO_CREDIT_IMPUTED_SCORE (720, high-risk band) when there is no score."""
     s = loan.get("creditScoreNumeric")
     if s is None or s != s:
         return C.NO_CREDIT_IMPUTED_SCORE

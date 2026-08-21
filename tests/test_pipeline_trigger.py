@@ -116,6 +116,22 @@ def test_no_qualifying_no_send(json_backend, capture_notify):
     assert capture_notify == []
 
 
+def test_notification_gate_is_strictly_above_40(json_backend, capture_notify):
+    pipeline.run(raw_rows=[_loan("1", 40.0)])
+    assert capture_notify == []
+    pipeline.run(raw_rows=[_loan("1", 40.01)])
+    assert capture_notify == [["1"]]
+
+
+def test_empty_snapshot_fails_before_state_is_overwritten(json_backend, capture_notify):
+    """A transient auth/API/parser outage must not archive the entire active book."""
+    pipeline.run(raw_rows=[_loan("1", 50)])
+    with pytest.raises(RuntimeError, match="refusing to overwrite active state"):
+        pipeline.run(raw_rows=[])
+    assert capture_notify == [["1"]]
+    assert [str(x["loanId"]) for x in storage.load_active_loans()] == ["1"]
+
+
 def test_loud_tier_alerts_new_high_loan_even_when_standard_unchanged(
         json_backend, capture_notify, monkeypatch):
     """A NEW >100% loan fires the loud tier immediately even though the standard

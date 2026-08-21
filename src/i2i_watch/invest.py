@@ -80,7 +80,7 @@ def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT,
     >= min_score, ranked by importance: rate desc, then credit score desc
     (no credit -> imputed NO_CREDIT_IMPUTED_SCORE, the high-risk band), then
     tenure desc. Field names per config (HAR-verified). No-credit loans are
-    imputed NO_CREDIT_IMPUTED_SCORE (700), which meets the default min_score=700
+    imputed NO_CREDIT_IMPUTED_SCORE (720), which meets the default min_score=720
     gate — a missing bureau file is NOT treated as a 0 and is NOT filtered out,
     but ranks as High Risk / High Uncertainty below any real 750+ score."""
     out = []

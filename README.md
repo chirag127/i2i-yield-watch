@@ -134,7 +134,8 @@ investor, so the portfolio runs one account per i2i login — each with its OWN
 auth, rate gate and `data/invested-loans-<acct>.json` dedup namespace. The default
 account (`chirag`) keeps the legacy unprefixed env names; every secondary account
 uses `I2I_<ACCOUNT>_*` (e.g. `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`,
-`I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT`). Select the account with
+`I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT`,
+`I2I_NEERU_AUTOINVEST_MIN_CREDIT_SCORE`). Select the account with
 `--account <name>` or `I2I_ACCOUNT=<name>`; declare the whole portfolio with
 `I2I_ACCOUNTS=chirag,neeru`. Adding a third account = add its name + env vars +
 a row in the `invest.yml` matrix.
@@ -170,9 +171,10 @@ gets first pick of every qualifying loan. Both accounts gate at **>100%**
 | `I2I_TXN_PIN` | — | Transaction PIN required to place/cancel (`--live`) |
 | `I2I_ACCOUNTS` | `chirag` | Comma-separated portfolio account names |
 | `I2I_ACCOUNT` | first in `I2I_ACCOUNTS` | Account for this run (`--account` overrides) |
-| `I2I_NEERU_*` | — | Secondary-account envs: `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`, `I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT` (default 100)… |
+| `I2I_NEERU_*` | — | Secondary-account envs: `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`, `I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT` (default 100), `I2I_NEERU_AUTOINVEST_MIN_CREDIT_SCORE` (default 720)… |
 | `PRIORITY_HIGH_RATE_PCT` | `70` | Rate threshold for VERY_HIGH priority LABEL (display only) |
 | `PRIORITY_MEDIUM_RATE_PCT` | `50` | Rate threshold for MEDIUM priority LABEL (display only) |
+| `LISTING_MIN_ROWS` | `1` | Refuse to overwrite state when a scrape returns fewer rows; protects against empty/outage responses |
 
 | `TELEGRAM_ENABLED` | `false` | Enable Telegram notifications |
 | `TELEGRAM_BOT_TOKEN` | — | Bot token for `oriz127_bot` |
@@ -182,7 +184,7 @@ gets first pick of every qualifying loan. Both accounts gate at **>100%**
 | `NTFY_TOPIC` | — | ntfy topic |
 | `NTFY_USER` / `NTFY_PASSWORD` | — | ntfy credentials |
 | `DASHBOARD_URL` | — | URL included in Telegram alerts |
-| `STARTUP_JITTER_MS` | `0` | Random delay on startup to stagger parallel runs |
+| `STARTUP_JITTER_MS` | `2000` | Random delay on startup to stagger parallel runs |
 
 ---
 
