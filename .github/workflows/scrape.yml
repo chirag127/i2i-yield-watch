@@ -142,9 +142,16 @@ jobs:
           # invested-loans*.json + invest-idle.json files belong to invest.yml
           # — never stage them here, or concurrent invest runs collide on
           # rebase/push (the two workflows must not interfere; see invest.yml).
+          echo "=== DEBUG: data/active-loans.json ==="
+          python3 -c "import json; d=json.load(open('data/active-loans.json')); print(f'{len(d)} loans in working tree')"
+          git show HEAD:data/active-loans.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{len(d)} loans at HEAD')"
+          echo "=== DEBUG: archive ==="
+          ls -la data/archive/ 2>/dev/null || echo "no archive dir"
           git add data/active-loans.json data/notifications-sent.json \
                   data/notify-state.json data/stats.json data/runs.json \
-                  data/archive data/index.html 2>/dev/null || true
+                  data/archive 2>/dev/null || true
+          echo "=== DEBUG: staged files ==="
+          git diff --cached --stat
           if git diff --cached --quiet; then
             echo "no data change"
           else
