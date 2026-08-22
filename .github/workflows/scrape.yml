@@ -2,9 +2,11 @@ name: i2i Yield Watch — Auto Scraper
 
 on:
   schedule:
-    # GitHub throttles/drops high-frequency cron; a `*/5` degrades to ~hourly.
-    # We ask for every 15 min (GitHub honors longer intervals far more
-    # reliably) and each run SELF-LOOPS 3 scrapes x 300s internally.
+    # GitHub drops cron faster than every 5 min, so we ask for 15-min cron and
+    # each run SELF-LOOPS 9 polls x 120s internally -> ~2-min effective cadence
+    # (POLL_INTERVAL_S / POLL_ITERATIONS below; tune there, not in cron).
+    # ~720 listing requests/day + logins stays under i2i's aggressive-request
+    # thresholds that already 502 direct HTTP at higher volumes.
     - cron: '3,18,33,48 * * * *'
   # Do not trigger on data commits: that creates a self-triggering scrape chain
   # and collides with invest.yml's state commits.
@@ -88,7 +90,12 @@ jobs:
           NOTIFY_HIGH_RATE_PCT: '100'
           I2I_DIGEST_HOURS: '6'
           STARTUP_JITTER_MS: '2000'
-        run: .venv-ci/bin/python -m i2i_watch --iterations 3 --interval 300 -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
+          # ~2-min effective polling inside the 15-min cron window:
+          # 9 polls x 120s spans t=0..t=16 (job timeout 45m leaves headroom).
+          # Raise POLL_INTERVAL_S or lower POLL_ITERATIONS to back off i2i.
+          POLL_INTERVAL_S: '120'
+          POLL_ITERATIONS: '9'
+        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || env.POLL_ITERATIONS }} --interval ${{ vars.POLL_INTERVAL_S || env.POLL_INTERVAL_S }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
       - name: Commit and publish updated data (state persistence — dedup across runs)
         run: |
@@ -110,8 +117,9 @@ jobs:
             git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')"
 
             # git-crypt leaves the decrypted .env marked modified after the
-            # scraper uses it. Stash only that runtime secret on the ephemeral
-            # runner; it is never staged, committed, pushed, or reapplied.
+            # scraper uses it (its clean/smudge filters keep index and worktree
+            # out of sync on a fresh checkout). Restore the tracked blob from
+            # HEAD so the working tree matches the commit, then verify clean.
             # Any other dirty file is unexpected and must fail visibly.
             dirty_files=$(git diff --name-only)
             unexpected_dirty=$(printf '%s\n' "$dirty_files" | sed '/^$/d;/^\.env$/d;/^i2i-yield-watch-sa\.json$/d')
@@ -119,9 +127,11 @@ jobs:
               echo "::error::Unexpected dirty file after data commit: $unexpected_dirty"
               exit 1
             fi
-            if [ -n "$dirty_files" ]; then
-              git stash push --quiet -m "runtime git-crypt secret; never apply" -- .env i2i-yield-watch-sa.json || true
-            fi
+            for f in .env i2i-yield-watch-sa.json; do
+              if [ -f "$f" ] && ! git diff --quiet -- "$f"; then
+                git checkout -- "$f"
+              fi
+            done
             rm -f git-crypt-key
             if [ -n "$(git status --porcelain)" ]; then
               echo "::error::Checkout is still dirty before data push"
