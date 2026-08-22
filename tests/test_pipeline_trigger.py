@@ -162,6 +162,33 @@ def test_loud_tier_alerts_new_high_loan_even_when_standard_unchanged(
     assert "1" in st.get("highIds", [])
 
 
+def test_loud_tier_labels_credit_skip_honestly(json_backend, capture_notify, monkeypatch):
+    """The loud-tier 'AUTO-INVEST CANDIDATE' alert must label a >100% loan with
+    sub-720 credit as SKIP (the investor applies the credit gate, so announcing
+    it as a pure candidate would be a lie)."""
+    sent_loud = []
+
+    def fake_send_text(text, silent=False):
+        sent_loud.append(text)
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+
+    # >100% loan with low credit (600): flagged as SKIP, not "will invest"
+    low = _loan("21", 130)
+    low["usr_cibil_score"] = "600"
+    pipeline.run(raw_rows=[low])
+    assert len(sent_loud) == 1
+    assert "will invest" not in sent_loud[0]
+    assert "SKIP" in sent_loud[0]
+
+    # >100% loan with credit 742: flagged as investable
+    sent_loud.clear()
+    pipeline.run(raw_rows=[_loan("22", 130)])
+    assert len(sent_loud) == 1
+    assert "will invest" in sent_loud[0]
+
+
 def test_loud_tier_does_not_respam_existing_high_loan(json_backend, capture_notify, monkeypatch):
     """An already-alerted >100% loan stays silent on later runs (no every-run spam)."""
     sent_loud = []

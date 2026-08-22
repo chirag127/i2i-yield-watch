@@ -141,13 +141,26 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     # ── LOUD tier alert (fires on new >100% loans regardless of standard tier) ──
     high_sent = False
     if new_high_ids:
+        from .scorer import has_no_credit, imputed_credit
+
+        credit_gate = C.AUTOINVEST_MIN_CREDIT_SCORE
         high_to_send = [ln for ln in high if str(ln["loanId"]) in new_high_ids]
         try:
             lines = [f"🔔 <b>NEW LOAN &gt;{high_threshold:g}% — AUTO-INVEST CANDIDATE</b>"]
             for ln in high_to_send:
                 url = ln.get("loanUrl") or ""
                 name = f'<a href="{url}">Loan {ln["loanId"]}</a>' if url else f'Loan {ln["loanId"]}'
-                lines.append(f"• {name}: {ln['interestRate']:.2f}% — ₹{ln.get('amountLeft','')}")
+                # The rate is guaranteed > high_threshold here, but the INVESTOR
+                # also applies the credit gate (>=720, no-score imputed 720). Label
+                # the loan with its true investability so the "candidate" alert is
+                # honest — a >100% loan with sub-720 credit WILL be skipped.
+                score = imputed_credit(ln)
+                no_credit = has_no_credit(ln)
+                cs = "no-credit→720" if no_credit else f"credit {score:.0f}"
+                flag = "✅ will invest" if score >= credit_gate \
+                    else f"⚠️ credit <{credit_gate:.0f} — auto-invest will SKIP"
+                lines.append(f"• {name}: {ln['interestRate']:.2f}% — ₹{ln.get('amountLeft','')} "
+                             f"| {cs} {flag}")
             high_sent = send_telegram_text("\n".join(lines))  # loud by default
             log.info("loud-tier alert: %d new loan(s) >%g%% -> %s",
                      len(high_to_send), high_threshold, "sent" if high_sent else "FAILED")
