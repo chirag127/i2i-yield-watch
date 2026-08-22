@@ -23,6 +23,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  actions: read        # failure-alert step reads run/job metadata via gh
 
 concurrency:
   group: scraper
@@ -142,12 +143,20 @@ jobs:
             # Do not use pull --autostash: it previously conflicted while
             # applying the decrypted .env and still returned success. A green
             # run now means the fresh data reached origin/main.
+            # -X theirs: a concurrent scrape can land a newer data commit
+            # between this run's checkout and its push (runs are pinned to
+            # their creation SHA, so the rebase then conflicts on the
+            # scrape-owned files). The data this run just scraped is newer,
+            # so it wins; the conflict is deterministic and retrying without
+            # -X theirs would fail forever.
+            echo "base commit: $(git rev-parse --short HEAD)  origin/main: $(git rev-parse --short origin/main)"
             pushed=false
             for i in 1 2 3; do
               if git fetch origin main \
-                  && git rebase origin/main \
+                  && git rebase -X theirs origin/main \
                   && git push origin HEAD:main; then
                 pushed=true
+                echo "data pushed: $(git rev-parse --short HEAD)"
                 break
               fi
               echo "push attempt $i failed, retrying..."
@@ -171,13 +180,16 @@ jobs:
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           # Self-identifying alert: an alert for an OLD failed run must never
           # look like a live failure. Include run start time + failing step.
-          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/tmp/gh_api_err || echo "unknown")
+          [ "$STARTED" = "unknown" ] && echo "gh api run metadata failed: $(cat /tmp/gh_api_err)"
           FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
-            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
-          # Consecutive failures: count completed runs since the last green one
-          # so a bad streak doesn't spam identical alerts (still loud on the first).
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/tmp/gh_run_err || echo "unknown")
+          [ "$FAIL_STEP" = "unknown" ] && echo "gh run view failed: $(cat /tmp/gh_run_err)"
+          # Consecutive failures: completed runs since the last green one, so a
+          # bad streak doesn't spam identical alerts. Counts failure entries
+          # before the first success in the last 10 runs.
           CONSEC=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${GITHUB_WORKFLOW}" --limit 10 --json conclusion \
-            --jq '[.[] | select(.conclusion == "failure" or .conclusion == "success")] | .[1:] | .[0:index(. == "success")] | length' 2>/dev/null || echo 0)
+            --jq '[.[].conclusion] | (index("success") // length) as $n | .[0:$n] | length' 2>/dev/null || echo 0)
           MSG="⚠️ <b>i2i SCRAPER run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0AConsecutive failures: ${CONSEC}%0ANotifications may be paused until the next good run.%0A${RUN_URL}"
           curl -sS --max-time 20 -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \

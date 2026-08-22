@@ -11,6 +11,10 @@ on:
     - cron: "30 7 * * *"   # daily 07:30 UTC (13:00 IST)
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read        # failure-alert step reads run metadata via gh
+
 jobs:
   wallet-check:
     runs-on: ubuntu-latest

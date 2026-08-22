@@ -50,6 +50,7 @@ on:
 
 permissions:
   contents: write             # commit data/invested-loans*.json back (git-as-DB)
+  actions: read               # failure-alert step reads run/job metadata via gh
 
 jobs:
   invest-chirag:
