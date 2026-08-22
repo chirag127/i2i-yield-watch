@@ -1,0 +1,115 @@
+name: i2i Telegram Command Bot
+
+# Lets the owner re-trigger workflows from Telegram: send "/invest" (or
+# /scrape /status /help …) to the bot and this workflow long-polls getUpdates,
+# dispatches the matching workflow via the REST API, and replies in the chat.
+#
+# WHY SELF-LOOP: GitHub's schedule cron floor is 5 minutes, and a workflow
+# that simply polls once per cron tick would have up to 5-min command latency
+# PLUS queue delay. Instead each run long-polls getUpdates (~50s/iteration)
+# for most of its window, so a message is usually answered within ~a minute of
+# a job being alive. An external tick pinger (scripts/dispatch_tick.sh) can
+# keep a job continuously alive for near-real-time commands.
+#
+# AUTH: dispatch uses GITHUB_TOKEN (actions:write permission below). Per GitHub
+# docs, workflow_dispatch triggered by GITHUB_TOKEN DOES create a new run
+# (the documented exception to "GITHUB_TOKEN events don't create runs").
+#
+# STATE: data/telegram-bot-state.json holds the last processed update_id
+# (git-as-DB, committed back like invest.yml's state) so a crashed run never
+# re-processes old messages. Ownership partition: this workflow owns ONLY
+# that file — never data/active-loans.json etc. (scrape.yml's files).
+
+on:
+  schedule:
+    # Every 5 min (GitHub cron floor) — the self-loop inside covers the window.
+    - cron: '3,18,33,48 * * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [tick]
+
+permissions:
+  actions: write    # dispatch other workflows via GITHUB_TOKEN
+  contents: write   # commit data/telegram-bot-state.json (git-as-DB)
+
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Stdlib-only module: no venv, no pip install, no apt-get — the whole
+      # job is checkout + python3, so it starts fast and never hits the
+      # historical Playwright/apt cold-start failure.
+      - name: Run Telegram command bot (self-loop)
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONPATH: src
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          BOT_STATE_PATH: data/telegram-bot-state.json
+          BOT_STATS_PATH: data/stats.json
+          # ~5 polls x 50s long-poll ≈ 4.5 min of listening per 5-min window.
+          # Raise ITERATIONS to listen longer (external tick keeps it alive).
+          BOT_ITERATIONS: '5'
+        run: python3 -m i2i_watch.bot --iterations ${{ vars.BOT_ITERATIONS || env.BOT_ITERATIONS }} --timeout 50
+
+      - name: Commit bot state (offset dedup — git-as-DB)
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # OWNERSHIP PARTITION: this workflow owns ONLY the bot state file.
+          # Never stage scrape/invest data files here.
+          git add data/telegram-bot-state.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "no bot state change"
+          else
+            git commit -m "data: telegram bot offset $(date -u +'%F %H:%MZ')"
+            pushed=false
+            for i in 1 2 3; do
+              # -X theirs: the offset file is last-writer-wins; a concurrent
+              # push from scrape/invest must not block the bot from pushing.
+              if git fetch origin main \
+                  && git rebase -X theirs origin/main \
+                  && git push origin HEAD:main; then
+                pushed=true
+                break
+              fi
+              echo "push attempt $i failed, retrying..."
+              if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+                git rebase --abort
+              fi
+              sleep 5
+            done
+            if [ "$pushed" != true ]; then
+              echo "::error::Bot state was not pushed after 3 attempts"
+              exit 1
+            fi
+          fi
+
+      - name: Alert on failure (a dead bot = owner can't re-trigger anything)
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set +e
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
+          FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
+          MSG="⚠️ <b>i2i TELEGRAM BOT run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0AYou can't re-trigger workflows by message until this is fixed.%0A${RUN_URL}"
+          curl -sS --max-time 20 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
+            && echo "failure alert sent" || echo "failure alert send failed"

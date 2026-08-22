@@ -89,14 +89,30 @@ Static GitHub Pages site at `chirag127.github.io/i2i-yield-watch`. Reads the com
 
 Features: Active / Archived tabs, month pills, rate/priority/credit/product filters, search, sort, pagination, 4 charts, keyboard shortcuts (`/` search, `←→` page, `R` reset, `1/2` tabs, `F` filter toggle), dark/light theme.
 
+### Telegram command bot (`telegram-bot.yml`)
+
+Message the same bot to **re-trigger workflows on demand** — no need to wait for the next cron:
+
+| Command | What it does |
+|---|---|
+| `/invest` | runs the REAL-MONEY auto-invest immediately (both accounts) |
+| `/scrape` | forces a fresh market scrape + notifications |
+| `/wallet` | checks investable escrow balance (all accounts) |
+| `/digest` | sends the portfolio digest |
+| `/emireport` | refreshes the EMI-status snapshot |
+| `/status` | replies with the latest dashboard stats (no dispatch) |
+| `/help` | lists commands |
+
+Only the owner's chat (the configured `TELEGRAM_CHAT_ID`) can trigger real-money commands. The workflow long-polls Telegram `getUpdates` (~50 s/iteration, self-looping inside each 5-min cron window) so commands are answered within about a minute while a job is alive; dispatching uses `GITHUB_TOKEN` with `actions: write` (per GitHub docs, `workflow_dispatch` triggered by `GITHUB_TOKEN` *does* create a run). The last processed update_id is persisted in `data/telegram-bot-state.json` (git-as-DB), so a crashed run never re-dispatches an old command.
+
 ### CI — GitHub Actions (`scrape.yml`)
 
 - **Cron:** `3,18,33,48 * * * *` (every 15 min, UTC). GitHub honors 15-min intervals reliably.
-- **Self-loop:** each cron fires `--iterations 2 --interval 90` — 2 scrapes ~90 s apart to approximate 5-min cadence.
+- **Self-loop:** each cron fires `--iterations 9 --interval 120` — ~2-min effective polling inside the 15-min window (`POLL_INTERVAL_S` / `POLL_ITERATIONS` are workflow vars, tune without editing cron).
 - **Concurrency:** `group: scraper`, `cancel-in-progress: false` — queued, never skipped.
-- **Data commit:** `git add data && git commit && git pull --rebase --autostash origin main && git push` after each run. Rebase guard prevents split-brain.
+- **Data commit:** stages only the scraper-owned files (`data/active-loans.json`, `notify-*.json`, `stats.json`, `runs.json`, `archive/`), restores the git-crypt-decrypted `.env`/SA blob, then `fetch + rebase + push` with a retry loop — **the job fails loudly if the data commit is not pushed**, so a green run always means fresh data reached `main` (no more silent stale dashboard).
 - **Deploy:** after scrape succeeds, build `_site/` (dashboard HTML/JS/CSS + `data/`), upload as Pages artifact, deploy.
-- **Failure alert:** `if: failure()` step pings Telegram.
+- **Failure alert:** `if: failure()` step pings Telegram with the run's start time + failing step, so a stale alert from an old failed run can never be mistaken for a live one.
 
 ### Auto-investor (`invest.py` / `cancel.py`) — REAL MONEY
 
@@ -105,7 +121,7 @@ Places (and reverses) investments via **direct HTTP** to the i2i API with **auto
 Modular split: `config.py` (all tunables), `auth.py` (AES login), `client.py` (all HTTP, one place), `invest.py` (pure select/rank/size/EMI + orchestrator), `cancel.py` (thin).
 
 - **Login:** POST `.../login/` with `usr_password` AES-encrypted exactly as the SPA does (CryptoJS `AES.encrypt(pw, "kXyb3gzU")`; passphrase lifted from i2i's `main.js`, proven by decrypting a captured login blob). Fresh `session_id` + `csrf_token` every run — token expiry is a non-issue. **Auth chain:** auto-login is the primary path; `I2I_CSRF_TOKEN` + `I2I_SESSION_ID` (captured from a HAR) are used only as a fallback if login fails or no creds are set — session tokens expire, so they must never be the primary auth.
-- **Select + rank:** loans with rate **strictly > `AUTOINVEST_MIN_RATE_PCT`** (default **100**) **AND** credit score **>= `AUTOINVEST_MIN_CREDIT_SCORE`** (default **720** — a missing credit score is imputed 720 and *passes* the gate; never treated as 0), ranked rate desc then `bloan_cibil_score` desc.
+- **Select + rank:** loans with rate **strictly > `AUTOINVEST_MIN_RATE_PCT`** (default **100**) **AND** credit score **>= 700** (centralized in `src/i2i_watch/config.py` — a missing credit score is imputed 720 and *passes* the gate; never treated as 0), ranked rate desc then `bloan_cibil_score` desc.
 - **Size:** `min(PER_LOAN_CAP, amtLeft, wallet)`, floored to `invest_multiple_value` and whole rupees, skipped if `< INVEST_MIN_AMOUNT`. A run keeps going down the ranked list until the wallet is exhausted (no per-run cap).
 - **Dry-run default** — prints the plan, places nothing. `--live` places for real (requires `I2I_TXN_PIN`). Any error mid-run STOPS.
 
@@ -134,8 +150,7 @@ investor, so the portfolio runs one account per i2i login — each with its OWN
 auth, rate gate and `data/invested-loans-<acct>.json` dedup namespace. The default
 account (`chirag`) keeps the legacy unprefixed env names; every secondary account
 uses `I2I_<ACCOUNT>_*` (e.g. `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`,
-`I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT`,
-`I2I_NEERU_AUTOINVEST_MIN_CREDIT_SCORE`). Select the account with
+`I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT`). Select the account with
 `--account <name>` or `I2I_ACCOUNT=<name>`; declare the whole portfolio with
 `I2I_ACCOUNTS=chirag,neeru`. Adding a third account = add its name + env vars +
 a row in the `invest.yml` matrix.
@@ -144,7 +159,7 @@ CI: `.github/workflows/invest.yml` runs **two sequential jobs in the IST daytime
 window — chirag always first** (`invest-chirag` places and commits, then
 `invest-neeru` starts via `needs:` and fills what's left), so the primary account
 gets first pick of every qualifying loan. Both accounts gate at **>100%**
-(chirag >100%, neeru >100%), credit score **>= 720**. Requires per-account secrets
+(chirag >100%, neeru >100%), credit score **>= 700**. Requires per-account secrets
 `I2I_EMAIL`/`I2I_PASSWORD`/`I2I_TXN_PIN` (chirag) and `I2I_NEERU_*` (neeru) +
 `TELEGRAM_*` for the summary; CSRF/SESSION tokens are optional fallback auth
 (refresh from a HAR when login is unavailable).
@@ -160,7 +175,7 @@ gets first pick of every qualifying loan. Both accounts gate at **>100%**
 | `NOTIFY_HIGH_RATE_PCT` | `100` | **LOUD alert gate** — fires the moment a loan exceeds this (auto-invest candidate), even if the standard set is unchanged |
 | `I2I_DIGEST_HOURS` | unset | Re-send the qualifying set every N hours even when unchanged (so a stable market never goes silent) |
 | `AUTOINVEST_MIN_RATE_PCT` | `100` | **Auto-invest gate** — place real money only on rate **>** this |
-| `AUTOINVEST_MIN_CREDIT_SCORE` | `720` | **Credit gate** — skip loans with score **<** this (no-score loans are imputed 720 and pass) |
+| `AUTOINVEST_MIN_CREDIT_SCORE` | `700` in `src/i2i_watch/config.py` | **Centralized credit gate** — skip loans with score **<700** (no-score loans are imputed 720 and pass); not a workflow/account override |
 | `IDLE_WATCHDOG_DAYS` | `3` | After this many days with no qualifying loan, send a silent Telegram nudge |
 | `IDLE_WATCHDOG_LOUD` | `false` | Make the idle nudge a loud (buzzing) alert |
 | `WALLET_ALERT_THRESHOLD` | `10000` | Below this Rs investable escrow, the wallet-check ping becomes a LOUD alert |
@@ -171,7 +186,7 @@ gets first pick of every qualifying loan. Both accounts gate at **>100%**
 | `I2I_TXN_PIN` | — | Transaction PIN required to place/cancel (`--live`) |
 | `I2I_ACCOUNTS` | `chirag` | Comma-separated portfolio account names |
 | `I2I_ACCOUNT` | first in `I2I_ACCOUNTS` | Account for this run (`--account` overrides) |
-| `I2I_NEERU_*` | — | Secondary-account envs: `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`, `I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT` (default 100), `I2I_NEERU_AUTOINVEST_MIN_CREDIT_SCORE` (default 720)… |
+| `I2I_NEERU_*` | — | Secondary-account envs: `I2I_NEERU_EMAIL`, `I2I_NEERU_PASSWORD`, `I2I_NEERU_TXN_PIN`, `I2I_NEERU_AUTOINVEST_MIN_RATE_PCT` (default 100), the centralized credit gate from `src/i2i_watch/config.py`… |
 | `PRIORITY_HIGH_RATE_PCT` | `70` | Rate threshold for VERY_HIGH priority LABEL (display only) |
 | `PRIORITY_MEDIUM_RATE_PCT` | `50` | Rate threshold for MEDIUM priority LABEL (display only) |
 | `LISTING_MIN_ROWS` | `1` | Refuse to overwrite state when a scrape returns fewer rows; protects against empty/outage responses |
