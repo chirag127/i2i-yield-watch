@@ -66,20 +66,20 @@ def test_select_filters_and_ranks():
     assert [s["loanId"] for s in select(rows, 40.0, min_score=0)] == [4, 2, 1]
 
 
-def test_select_credit_gate_filters_below_720():
-    # real scores below the 720 gate are never invested; 720 and above pass
+def test_select_credit_gate_filters_below_700():
+    # real scores below the 700 gate are never invested; 700 and above pass
     rows = [
-        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 719, "pl_amt_left": "5000"},
-        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 720, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 699, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
         {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 100.0)] == [4, 3, 2]  # 719 dropped
+    assert [s["loanId"] for s in select(rows, 100.0)] == [4, 3, 2]  # 699 dropped
 
 
 def test_select_credit_gate_no_credit_imputed_720_passes():
     # a loan with NO credit score is imputed NO_CREDIT_IMPUTED_SCORE (720), which
-    # MEETS the 720 gate -> kept, but ranks below any real 750+ score
+    # MEETS the 700 gate -> kept, but ranks below any real 750+ score
     rows = [
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": "", "pl_amt_left": "5000"},
@@ -106,9 +106,10 @@ def test_select_strictly_above_gate():
     assert select(rows, 40.0) == []  # 40 is NOT > 40
 
 
-def test_autoinvest_gate_default_is_100():
-    # lock the real-money threshold: place only on loans STRICTLY > 100%
+def test_autoinvest_gate_defaults():
+    # lock the real-money thresholds: strictly >100% rate and >=700 credit
     assert C.AUTOINVEST_MIN_RATE_PCT == 100.0
+    assert C.AUTOINVEST_MIN_CREDIT_SCORE == 700.0
 
 
 def test_select_gate_100_keeps_only_above_100():
@@ -329,11 +330,11 @@ def test_run_excludes_invested(monkeypatch, capsys):
 
 def test_credit_near_misses_flags_rate_ok_credit_low():
     rows = [
-        # qualifies (rate > 100 AND credit >= 720) -> NOT a near-miss
+        # qualifies (rate > 100 AND credit >= 700) -> NOT a near-miss
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "usr_cibil_score": 800, "pl_amt_left": "5000"},
         # near-miss: rate ok, real credit too low
         {"pl_bloan_id": 2, "pl_applicable_rate": "118.0", "usr_cibil_score": 650, "pl_amt_left": "5000"},
-        # no credit (imputed 720 >= 720 passes) -> NOT a near-miss
+        # no credit (imputed 720 >= 700 passes) -> NOT a near-miss
         {"pl_bloan_id": 3, "pl_applicable_rate": "116.0", "usr_cibil_score": None, "pl_amt_left": "5000"},
         # below rate gate -> not a near-miss either
         {"pl_bloan_id": 4, "pl_applicable_rate": "100.0", "usr_cibil_score": 500, "pl_amt_left": "5000"},
@@ -362,7 +363,7 @@ def test_select_reads_usr_cibil_score_with_bloan_fallback():
         {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "usr_cibil_score": 650, "pl_amt_left": "5000"},
     ]
     sel = select(rows, 100.0, 720.0)
-    # 1 (800), 2 (750 fallback), 3 (no-credit imputed 720) qualify; 4 (650) dropped
+    # 1 (800), 2 (750 fallback), 3 (no-credit imputed 720) qualify; 4 (650) dropped at this explicit 720 threshold
     assert [s["loanId"] for s in sel] == [1, 2, 3]
     assert next(s for s in sel if s["loanId"] == 3)["noCredit"] is True
 
@@ -515,8 +516,9 @@ def test_end_to_end_plan_from_fixture(monkeypatch):
 
     monkeypatch.setattr(INV, "I2iClient", _E2EClient)
     monkeypatch.setenv("I2I_TXN_PIN", "1234")
-    with patch.object(INV.storage, "record_invested"), patch.object(INV, "send_telegram_text"):
+    with patch.object(INV.storage, "record_invested"), patch.object(INV, "send_telegram_text") as notify:
         assert INV.run(live=True) == 0
+    assert 'href="https://www.i2ifunding.com/borrower/listing/public-profile/' in notify.call_args.args[0]
     # All 5 fixture loans placed at min(5000, remaining) — 5 x Rs 5,000
     assert len(placed_payloads) == 5
     assert all(p["amount"] <= 5000 for p in placed_payloads)
