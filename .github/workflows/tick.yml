@@ -1,0 +1,72 @@
+name: i2i Bot Tick Pinger
+
+# Keeps the Telegram command bot continuously alive.
+#
+# The bot workflow has NO schedule of its own — it runs CONTINUOUSLY inside
+# one long-lived job and self-hands-off before its job timeout. This pinger
+# is the crash-recovery net: it checks every 5 min (GitHub's cron floor)
+# whether a bot run is alive (in_progress / queued); if not, it dispatches
+# one. So a bot that dies unexpectedly is restarted within ~5 min, and a
+# healthy bot is never disturbed (no double runs — dispatch only happens
+# when nothing is alive).
+#
+# An external cron pinger (scripts/dispatch_tick.sh, repository_dispatch
+# type "tick") can also fire this for even faster recovery; a tick while the
+# bot is alive is a harmless no-op.
+
+on:
+  schedule:
+    - cron: '8,23,38,53 * * * *'   # 5-min floor; offset from :03/:18/:33/:48
+  workflow_dispatch:
+  repository_dispatch:
+    types: [tick]
+
+permissions:
+  actions: write    # dispatch telegram-bot.yml (and read its run status)
+  contents: read
+
+concurrency:
+  group: telegram-bot-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dispatch the bot if it is not already alive
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Any run that is not completed (in_progress, queued, waiting) means
+          # a bot is alive or on its way — do not stack another one.
+          ALIVE=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/telegram-bot.yml/runs?per_page=10" \
+            --jq '[.workflow_runs[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)
+          echo "bot runs alive/queued: ${ALIVE}"
+          if [ "${ALIVE}" -gt 0 ]; then
+            echo "bot is alive — nothing to do"
+            exit 0
+          fi
+          echo "no bot alive — dispatching"
+          gh workflow run telegram-bot.yml --repo "${GITHUB_REPOSITORY}"
+          echo "dispatched telegram-bot.yml"
+
+      - name: Alert on failure (a dead pinger = bot never restarts)
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set +e
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
+          FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
+          MSG="⚠️ <b>i2i BOT TICK PINGER run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0AThe bot may never restart until this is fixed.%0A${RUN_URL}"
+          curl -sS --max-time 20 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
+            && echo "failure alert sent" || echo "failure alert send failed"

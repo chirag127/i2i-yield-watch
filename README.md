@@ -123,7 +123,12 @@ Every command also appears in the **slash menu** — type `/` in the chat (or ta
 
 **Security:** only the chat whose id equals `TELEGRAM_CHAT_ID` can trigger real-money workflows — anyone else's messages are read and ignored (the offset is still advanced, so foreign messages don't block yours). To add a second phone, put both chat ids in the secret, comma-separated.
 
-**How it stays alive:** the workflow long-polls `getUpdates` (~50 s/iteration, self-looping inside each 5-min cron window) so commands are answered within about a minute while a job is alive; dispatching uses `GITHUB_TOKEN` with `actions: write` (per GitHub docs, `workflow_dispatch` triggered by `GITHUB_TOKEN` *does* create a run). The last processed update_id is persisted in `data/telegram-bot-state.json` (git-as-DB), so a crashed run never re-dispatches an old command.
+**How it stays alive (continuously):** the bot job has no cron of its own — it runs **continuously** inside one long-lived job (350-min timeout) and long-polls `getUpdates` forever (`--iterations 0`). Because long-poll returns the instant a message is waiting, a command is answered in **~1–3 s** while a job is alive — no more waiting for a 5-min cron window. Two mechanisms keep it alive:
+
+1. **Self-handoff** — ~10 min before the job timeout, the job dispatches a successor bot run and exits; the `telegram-bot` concurrency group queues the successor, so the handoff gap is seconds. A companion loop commits `data/telegram-bot-state.json` (the `getUpdates` offset) to git every 60 s, so even a job killed by timeout never re-processes old messages.
+2. **Tick pinger (`tick.yml`)** — the crash-recovery net: it checks every 5 min (GitHub's cron floor) whether a bot run is alive and dispatches one only if not. A dead bot is restarted within ~5 min; a healthy bot is never double-run. An external cron pinger (`scripts/dispatch_tick.sh`, `repository_dispatch` type `tick`) can fire it too — a tick while the bot is alive is a harmless no-op.
+
+Dispatching uses `GITHUB_TOKEN` with `actions: write` (per GitHub docs, `workflow_dispatch` triggered by `GITHUB_TOKEN` *does* create a run).
 
 ### CI — GitHub Actions (`scrape.yml`)
 

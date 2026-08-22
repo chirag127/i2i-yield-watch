@@ -292,3 +292,80 @@ def test_main_exit_zero_when_unconfigured(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     assert bot.main(["--iterations", "1"]) == 0
+
+
+# ── main(): continuous mode (--iterations 0, used by the live workflow) ──────
+
+def test_main_continuous_success_polls_forever(monkeypatch):
+    """Continuous mode keeps polling (never exits) while polls succeed."""
+    import threading, time
+    calls = []
+    monkeypatch.setattr(bot, "get_updates", lambda *a, **k: calls.append(1) or [])
+    monkeypatch.setattr(bot, "register_commands", lambda tok: None)  # no network
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    monkeypatch.setenv("GITHUB_TOKEN", "g")
+    monkeypatch.setattr(bot.time, "sleep", lambda s: None)
+
+    result = {}
+    def run():
+        result["rc"] = bot.main(["--iterations", "0", "--timeout", "1"])
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    # NOTE: bot.time IS the global time module, so its sleep is patched to a
+    # no-op — wait on a time.time() deadline instead of time.sleep().
+    deadline = time.time() + 0.4
+    while time.time() < deadline and th.is_alive():
+        pass
+    # Must still be polling — continuous mode never exits on its own.
+    assert th.is_alive()
+    assert len(calls) >= 3  # polled repeatedly
+    # (daemon thread dies with the test process)
+
+
+def test_main_continuous_exits_1_after_max_consecutive_failures(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(bot, "get_updates", boom)
+    monkeypatch.setattr(bot, "register_commands", lambda tok: None)  # no network
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    monkeypatch.setenv("GITHUB_TOKEN", "g")
+    # 3 consecutive failures with max-failures=3 -> exit 1 (workflow alert fires)
+    rc = bot.main(["--iterations", "0", "--timeout", "1", "--max-failures", "3"])
+    assert rc == 1
+
+
+def test_main_continuous_recovers_after_transient_failure(monkeypatch):
+    """A single failure between successes must NOT trip the max-failures exit."""
+    import threading, time
+    calls = {"n": 0}
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient")
+        return []
+    monkeypatch.setattr(bot, "get_updates", flaky)
+    monkeypatch.setattr(bot, "register_commands", lambda tok: None)  # no network
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    monkeypatch.setenv("GITHUB_TOKEN", "g")
+    monkeypatch.setattr(bot.time, "sleep", lambda s: None)
+
+    result = {}
+    def run():
+        result["rc"] = bot.main(["--iterations", "0", "--timeout", "1", "--max-failures", "3"])
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    deadline = time.time() + 0.3
+    while time.time() < deadline and th.is_alive():
+        pass
+    assert th.is_alive()  # still polling after failure #1 + successes
+    monkeypatch.setattr(bot, "get_updates", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("kill")))
+    for _ in range(30):
+        if not th.is_alive():
+            break
+        time.sleep(0.05)
+    # It survived the transient failure, so it needed 3 consecutive failures
+    # to exit — meaning it must NOT have exited at 1.
+    assert result.get("rc") != 1

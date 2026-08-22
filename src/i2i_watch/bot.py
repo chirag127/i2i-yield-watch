@@ -259,8 +259,13 @@ def run_poll(
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="i2i_watch.bot")
-    p.add_argument("--iterations", type=int, default=5, help="long-poll cycles per job")
+    # 0 (or negative) = CONTINUOUS mode: long-poll forever until killed (the
+    # workflow runs it in the background and terminates it at handoff). The
+    # old finite mode (default 5) is kept for tests / manual one-shot runs.
+    p.add_argument("--iterations", type=int, default=5, help="poll cycles; 0 = run forever")
     p.add_argument("--timeout", type=int, default=50, help="getUpdates long-poll timeout (s)")
+    p.add_argument("--max-failures", type=int, default=6,
+                   help="continuous mode: exit 1 after this many CONSECUTIVE poll failures")
     p.add_argument("--state", default=os.environ.get("BOT_STATE_PATH", "data/telegram-bot-state.json"))
     p.add_argument("--stats", default=os.environ.get("BOT_STATS_PATH", "data/stats.json"))
     p.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
@@ -282,13 +287,41 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # noqa: BLE001
         print(f"command-menu registration failed (non-fatal): {e}", file=sys.stderr)
 
+    def _poll() -> int:
+        """One long-poll cycle; returns messages acted on."""
+        return run_poll(token, chat_id, gh_token, args.repo,
+                        args.state, args.stats, timeout=args.timeout)
+
+    if args.iterations <= 0:
+        # Continuous mode — the tick pinger keeps a job alive 24/7 and the
+        # workflow hands off before the job timeout. A run of consecutive
+        # failures means the bot is broken (dead token, API change, network
+        # block) — exit 1 so the workflow's failure alert fires and the
+        # pinger restarts the bot rather than idling silently forever.
+        consec_failures = 0
+        acted_total = 0
+        i = 0
+        while True:
+            i += 1
+            print(f"=== poll #{i} (continuous) ===", flush=True)
+            try:
+                acted_total += _poll()
+                consec_failures = 0
+            except Exception as e:  # noqa: BLE001
+                consec_failures += 1
+                print(f"poll {i} failed ({consec_failures} consecutive): {e}", file=sys.stderr)
+                if consec_failures >= args.max_failures:
+                    print(f"{args.max_failures} consecutive poll failures — bot broken, exiting",
+                          file=sys.stderr)
+                    return 1
+            time.sleep(2)
+
     acted_total = 0
     failures = 0
     for i in range(1, args.iterations + 1):
         print(f"=== poll {i}/{args.iterations} ===", flush=True)
         try:
-            acted_total += run_poll(token, chat_id, gh_token, args.repo,
-                                    args.state, args.stats, timeout=args.timeout)
+            acted_total += _poll()
         except Exception as e:  # noqa: BLE001
             failures += 1
             print(f"poll {i} failed: {e}", file=sys.stderr)

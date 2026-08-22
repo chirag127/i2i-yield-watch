@@ -43,11 +43,31 @@ def test_telegram_bot_can_dispatch_and_tracks_offset():
     assert "python3 -m i2i_watch.bot" in workflow
 
 
+def test_telegram_bot_is_continuously_alive_with_tick_pinger():
+    """The bot must not rely on cron windows: it runs continuously inside one
+    long-lived job, self-hands-off before its timeout, and a tick pinger
+    restarts it if it dies."""
+    bot_wf = _text("telegram-bot.yml")
+    assert "timeout-minutes: 350" in bot_wf          # long-lived job
+    assert "--iterations 0" in bot_wf                # continuous mode
+    assert "gh workflow run telegram-bot.yml" in bot_wf  # self-handoff
+    assert "BOT_HANDOFF_MIN" in bot_wf
+    assert "BOT_STATE_PUSH_S" in bot_wf              # periodic offset pushes
+    assert "schedule:" not in bot_wf                 # no own cron (pinger owns it)
+
+    tick = _text("tick.yml")
+    assert "gh workflow run telegram-bot.yml" in tick   # pinger dispatches bot
+    assert 'select(.status != "completed")' in tick     # only if not alive
+    assert "actions: write" in tick
+    assert "schedule:" in tick
+
+
 def test_every_workflow_alert_is_self_identifying():
     """Failure alerts must carry run start time + failing step so a stale
     alert (old failed run) can never look like a live one."""
     for name in ("scrape.yml", "invest.yml", "digest.yml",
-                 "emi-report.yml", "wallet-check.yml", "telegram-bot.yml"):
+                 "emi-report.yml", "wallet-check.yml", "telegram-bot.yml",
+                 "tick.yml"):
         workflow = _text(name)
         assert "Alert on failure" in workflow, f"{name}: missing failure alert"
         assert "gh api \"repos/${GITHUB_REPOSITORY}/actions/runs" in workflow, \

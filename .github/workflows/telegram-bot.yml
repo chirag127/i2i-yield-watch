@@ -4,32 +4,36 @@ name: i2i Telegram Command Bot
 # /scrape /status /help …) to the bot and this workflow long-polls getUpdates,
 # dispatches the matching workflow via the REST API, and replies in the chat.
 #
-# WHY SELF-LOOP: GitHub's schedule cron floor is 5 minutes, and a workflow
-# that simply polls once per cron tick would have up to 5-min command latency
-# PLUS queue delay. Instead each run long-polls getUpdates (~50s/iteration)
-# for most of its window, so a message is usually answered within ~a minute of
-# a job being alive. An external tick pinger (scripts/dispatch_tick.sh) can
-# keep a job continuously alive for near-real-time commands.
+# CONTINUOUS ALIVE (replaces the old 5-min cron + short self-loop):
+#   - No schedule here at all. tick.yml (the "tick pinger") runs on a 5-min
+#     cron (GitHub's floor) and dispatches this workflow ONLY when no bot run
+#     is alive — so a dead bot is restarted within ~5 min of dying.
+#   - Each bot job runs the bot in CONTINUOUS mode (--iterations 0) for its
+#     full 350-min timeout. getUpdates long-poll returns instantly when a
+#     message is waiting, so a command is answered in ~1-3 s while a job is
+#     alive — no more "within a minute" window gaps.
+#   - ~10 min before the job timeout, the job dispatches a successor bot run
+#     (workflow_dispatch) and exits; concurrency cancel-in-progress: false
+#     queues the successor, so the handoff gap is seconds, not minutes.
+#   - A companion loop commits data/telegram-bot-state.json every 60 s
+#     (git-as-DB) so a job killed by timeout/crash never re-processes old
+#     messages from a stale offset.
 #
 # AUTH: dispatch uses GITHUB_TOKEN (actions:write permission below). Per GitHub
 # docs, workflow_dispatch triggered by GITHUB_TOKEN DOES create a new run
 # (the documented exception to "GITHUB_TOKEN events don't create runs").
 #
-# STATE: data/telegram-bot-state.json holds the last processed update_id
-# (git-as-DB, committed back like invest.yml's state) so a crashed run never
-# re-processes old messages. Ownership partition: this workflow owns ONLY
-# that file — never data/active-loans.json etc. (scrape.yml's files).
+# STATE: data/telegram-bot-state.json holds the last processed update_id.
+# Ownership partition: this workflow owns ONLY that file — never
+# data/active-loans.json etc. (scrape.yml's files).
 
 on:
-  schedule:
-    # Every 5 min (GitHub cron floor) — the self-loop inside covers the window.
-    - cron: '3,18,33,48 * * * *'
   workflow_dispatch:
   repository_dispatch:
     types: [tick]
 
 permissions:
-  actions: write    # dispatch other workflows via GITHUB_TOKEN
+  actions: write    # dispatch other workflows via GITHUB_TOKEN (incl. self-handoff)
   contents: write   # commit data/telegram-bot-state.json (git-as-DB)
 
 concurrency:
@@ -39,7 +43,7 @@ concurrency:
 jobs:
   bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,7 +52,7 @@ jobs:
       # Stdlib-only module: no venv, no pip install, no apt-get — the whole
       # job is checkout + python3, so it starts fast and never hits the
       # historical Playwright/apt cold-start failure.
-      - name: Run Telegram command bot (self-loop)
+      - name: Run Telegram command bot (continuous, self-handoff)
         env:
           PYTHONIOENCODING: utf-8
           PYTHONPATH: src
@@ -58,11 +62,64 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           BOT_STATE_PATH: data/telegram-bot-state.json
           BOT_STATS_PATH: data/stats.json
-          # ~5 polls x 50s long-poll ≈ 4.5 min of listening per 5-min window.
-          # Raise ITERATIONS to listen longer (external tick keeps it alive).
-          BOT_ITERATIONS: '5'
-        run: python3 -m i2i_watch.bot --iterations ${{ vars.BOT_ITERATIONS || env.BOT_ITERATIONS }} --timeout 50
+          # Continuous mode: poll forever. HANDOFF_MIN before the job timeout
+          # (350 min), dispatch a successor and exit so the gap is seconds.
+          BOT_HANDOFF_MIN: '340'
+          BOT_STATE_PUSH_S: '60'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          python3 -m i2i_watch.bot --iterations 0 --timeout 50 &
+          BOT_PID=$!
+          START=$(date +%s)
+          HANDOFF_AT=$(( ${BOT_HANDOFF_MIN} * 60 ))
+          LAST_PUSH=0
+          while kill -0 "$BOT_PID" 2>/dev/null; do
+            NOW=$(date +%s)
+            ELAPSED=$(( NOW - START ))
+
+            # Crash-safe offset: push state every 60s (git-as-DB) so a job
+            # killed by timeout/runner-death still has a recent offset and the
+            # successor never re-processes old messages.
+            if [ $(( ELAPSED - LAST_PUSH )) -ge ${BOT_STATE_PUSH_S} ]; then
+              LAST_PUSH=$ELAPSED
+              git add data/telegram-bot-state.json 2>/dev/null || true
+              if ! git diff --cached --quiet; then
+                if git commit -m "data: telegram bot offset $(date -u +'%F %H:%MZ')" \
+                    && git fetch origin main -q \
+                    && git rebase -X theirs origin/main -q \
+                    && git push origin HEAD:main -q; then
+                  echo "state pushed (t=${ELAPSED}s)"
+                else
+                  echo "::warning::state push failed at t=${ELAPSED}s (will retry)"
+                  if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+                    git rebase --abort
+                  fi
+                fi
+              fi
+            fi
+
+            # Handoff: shortly before the job timeout, dispatch the successor
+            # (queued behind this job) and exit — gap = seconds.
+            if [ $ELAPSED -ge $HANDOFF_AT ]; then
+              echo "handing off — dispatching successor bot run (t=${ELAPSED}s)"
+              gh workflow run telegram-bot.yml --repo "${GITHUB_REPOSITORY}" || \
+                echo "::warning::handoff dispatch failed; tick pinger will restart"
+              kill "$BOT_PID" 2>/dev/null || true
+              wait "$BOT_PID" 2>/dev/null || true
+              echo "handoff complete"
+              exit 0
+            fi
+
+            sleep 5
+          done
+          wait "$BOT_PID" 2>/dev/null || true
+          echo "bot exited on its own (t=$(( $(date +%s) - START ))s)"
+
+      # Final flush (normal path): the periodic pushes above cover the offset
+      # continuously; this catches anything between the last push and exit.
       - name: Commit bot state (offset dedup — git-as-DB)
         run: |
           git config user.name  "github-actions[bot]"
@@ -105,10 +162,14 @@ jobs:
           set +e
           [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/tmp/gh_api_err || echo "unknown")
+          [ "$STARTED" = "unknown" ] && echo "gh api run metadata failed: $(cat /tmp/gh_api_err)"
           FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
-            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
-          MSG="⚠️ <b>i2i TELEGRAM BOT run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0AYou can't re-trigger workflows by message until this is fixed.%0A${RUN_URL}"
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/tmp/gh_run_err || echo "unknown")
+          [ "$FAIL_STEP" = "unknown" ] && echo "gh run view failed: $(cat /tmp/gh_run_err)"
+          CONSEC=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${GITHUB_WORKFLOW}" --limit 10 --json conclusion \
+            --jq '[.[].conclusion] | (index("success") // length) as $n | .[0:$n] | length' 2>/dev/null || echo 0)
+          MSG="⚠️ <b>i2i TELEGRAM BOT run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0AConsecutive failures: ${CONSEC}%0AYou can't re-trigger workflows by message until this is fixed.%0A${RUN_URL}"
           curl -sS --max-time 20 -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
