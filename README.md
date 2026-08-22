@@ -133,7 +133,7 @@ Dispatching uses `GITHUB_TOKEN` with `actions: write` (per GitHub docs, `workflo
 ### CI — GitHub Actions (`scrape.yml`)
 
 - **Cron:** `3,18,33,48 * * * *` (every 15 min, UTC). GitHub honors 15-min intervals reliably.
-- **Self-loop:** each cron fires `--iterations 9 --interval 120` — ~2-min effective polling inside the 15-min window (`POLL_INTERVAL_S` / `POLL_ITERATIONS` are workflow vars, tune without editing cron).
+- **Self-loop:** each cron fires `--iterations 6 --interval 120` — ~2-min effective polling inside the 15-min window (`POLL_INTERVAL_S` / `POLL_ITERATIONS` are workflow vars, tune without editing cron). 6×120s=12 min + ~2 min setup fits the window, so runs never overlap and queued runs are never cancelled.
 - **Concurrency:** `group: scraper`, `cancel-in-progress: false` — queued, never skipped.
 - **Data commit:** stages only the scraper-owned files (`data/active-loans.json`, `notify-*.json`, `stats.json`, `runs.json`, `archive/`), restores the git-crypt-decrypted `.env`/SA blob, then `fetch + rebase + push` with a retry loop — **the job fails loudly if the data commit is not pushed**, so a green run always means fresh data reached `main` (no more silent stale dashboard).
 - **Deploy:** after scrape succeeds, build `_site/` (dashboard HTML/JS/CSS + `data/`), upload as Pages artifact, deploy.

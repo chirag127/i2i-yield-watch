@@ -93,9 +93,12 @@ jobs:
           STARTUP_JITTER_MS: '2000'
           # ~2-min effective polling inside the 15-min cron window:
           # 9 polls x 120s spans t=0..t=16 (job timeout 45m leaves headroom).
-          # Raise POLL_INTERVAL_S or lower POLL_ITERATIONS to back off i2i.
+          # 6 x 120s = 12 min self-loop + ~2 min setup/publish fits inside the
+          # 15-min cron window, so runs never overlap and queued runs are never
+          # cancelled ("higher priority waiting request" churn). Effective
+          # polling is ~every 2 min while a job is alive.
           POLL_INTERVAL_S: '120'
-          POLL_ITERATIONS: '9'
+          POLL_ITERATIONS: '6'
         run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || env.POLL_ITERATIONS }} --interval ${{ vars.POLL_INTERVAL_S || env.POLL_INTERVAL_S }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
       - name: Commit and publish updated data (state persistence — dedup across runs)
