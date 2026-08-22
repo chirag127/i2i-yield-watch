@@ -4,22 +4,10 @@ on:
   schedule:
     # GitHub throttles/drops high-frequency cron; a `*/5` degrades to ~hourly.
     # We ask for every 15 min (GitHub honors longer intervals far more
-    # reliably) and each run SELF-LOOPS ~5 scrapes x 60s internally (see the
-    # "Run scraper (self-looping)" step) to approximate 5-min polling even
-    # when GitHub fires sparsely. GitHub cron is UTC.
+    # reliably) and each run SELF-LOOPS 3 scrapes x 300s internally.
     - cron: '3,18,33,48 * * * *'
-  # NO push trigger: every commit to main (invest.yml's invested-loans commits,
-  # scrape.yml's own data commits, dependabot merges) used to fire an immediate
-  # re-scrape — a self-triggering chain that made the effective interval ~0,
-  # queued runs behind each other in the concurrency group, and collided with
-  # invest.yml's real-money pushes. The schedule + workflow_dispatch above are
-  # the only triggers; the effective scrape interval is exactly the cron
-  # cadence (15 min), and the deploy job still updates Pages after each run.
-  #
-  # 5-MIN EFFECTIVE CADENCE: each run self-loops 3 iterations at 300s apart
-  # (t=0, t=5, t=10) inside the 15-min cron window — so a new loan is noticed
-  # at worst ~5 min after posting, without fighting GitHub's cron throttling
-  # (a `*/5` cron degrades to ~hourly and is dropped).
+  # Do not trigger on data commits: that creates a self-triggering scrape chain
+  # and collides with invest.yml's state commits.
   workflow_dispatch:
     inputs:
       reset_notify_state:
@@ -41,12 +29,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    # Cold runners can take 10-15 min on Playwright install alone; 20m killed
-    # runs mid-install (observed 2026-08-18). 45m gives cold install + self-loop
-    # + git-crypt + tests comfortable headroom.
     timeout-minutes: 45
-    outputs:
-      data_changed: ${{ steps.check.outputs.changed }}
 
     steps:
       - name: Checkout repository
@@ -54,13 +37,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      # NO browser install: the scraper now lists via direct HTTP (auto-login
-      # creds from secrets below — the same path invest.yml uses, proven as
-      # "listing via direct HTTP: N loans (no browser)"). Removing Playwright
-      # Chromium + the apt-get install-deps step makes the scraper faster AND
-      # immune to the flaky archive.ubuntu.com hangs that cancelled runs on
-      # 2026-08-19. sources/i2i.py keeps the browser scraper as a pure code
-      # fallback (raises cleanly if Playwright is absent and direct fails).
+      # Direct HTTP avoids the historical Playwright/apt-get cold-start failure.
       - name: Setup toolchain (cached venv, direct-HTTP only)
         uses: ./.github/actions/setup-i2i
         with:
@@ -69,23 +46,12 @@ jobs:
       - name: Run tests
         run: .venv-ci/bin/python -m pytest -q
 
-      # PRE-FLIGHT GUARD: git-crypt refuses to unlock a modified tree (observed
-      # 2026-08-20 — the e2e invest test wrote data/invest-idle.json into the
-      # checkout and silently killed 3 scrape runs at the unlock step). Fail
-      # here with a clear message instead of dying inside git-crypt, and keep
-      # the failure visible on the step that caused it. Tests isolate storage
-      # via tests/conftest.py; anything else that dirties the checkout is a
-      # regression that must surface in CI, not a silent scrape killer.
       - name: Pre-flight — checkout must be clean before git-crypt unlock
         run: |
           if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::Checkout is dirty before git-crypt unlock. git-crypt refuses to unlock a modified tree, so this run cannot proceed."
-            echo "Dirty files:"
+            echo "::error::Checkout is dirty before git-crypt unlock."
             git status --porcelain
-            echo ""
-            echo "Likely cause: a step above (usually the test suite) wrote files into the checkout."
-            echo "Fix: isolate that write (see tests/conftest.py, which redirects storage to a temp dir),"
-            echo "then re-run ci — the same regression must fail there too."
+            echo "A test or setup step wrote into the checkout; isolate that write before merging."
             exit 1
           fi
           echo "checkout clean — safe to unlock git-crypt"
@@ -102,17 +68,11 @@ jobs:
 
       - name: Run scraper (self-looping)
         env:
-          # git-as-DB JSON backend only — Firestore free tier 429'd under the
-          # self-loop and silently killed notifications. State lives in data/*.json.
           I2I_STORAGE: json
-          # Direct-HTTP listing auth (same secrets invest.yml uses) — without
-          # these the scraper fell back to the Playwright browser, whose
-          # apt-get install-deps is the flaky step that kept cancelling runs.
           I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
           I2I_PASSWORD: ${{ secrets.I2I_PASSWORD }}
           I2I_CSRF_TOKEN: ${{ secrets.I2I_CSRF_TOKEN }}
           I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
-          # Config loaded from git-crypt-decrypted .env; secrets below override.
           TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -124,60 +84,78 @@ jobs:
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           PRIORITY_HIGH_RATE_PCT: '70'
           PRIORITY_MEDIUM_RATE_PCT: '50'
-          # TWO-TIER NOTIFICATION GATES (see config.py):
-          #   NOTIFY_MIN_RATE_PCT=40  -> standard Telegram alert (rate > 40%)
-          #   NOTIFY_HIGH_RATE_PCT=100 -> LOUD alert the moment a >100% loan posts
           NOTIFY_MIN_RATE_PCT: '40'
           NOTIFY_HIGH_RATE_PCT: '100'
-          # Periodic digest: even when the qualifying set is UNCHANGED, re-send
-          # every N hours so a stable market never goes silent forever.
           I2I_DIGEST_HOURS: '6'
           STARTUP_JITTER_MS: '2000'
-          # Self-loop: 3 iterations 300s (5 min) apart fills the 15-min cron
-          # window (t=0, t=5, t=10) -> a new loan is caught within ~5 min of
-          # posting. Each iteration diffs against the storage the previous
-          # iteration wrote, so notifications chain correctly and stay
-          # near-real-time without re-sending already-notified loans.
         run: .venv-ci/bin/python -m i2i_watch --iterations 3 --interval 300 -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
-      - name: Commit updated data (state persistence — dedup across runs)
+      - name: Commit and publish updated data (state persistence — dedup across runs)
         run: |
+          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # OWNERSHIP PARTITION: scrape commits ONLY its own state files. The
-          # invested-loans*.json + invest-idle.json files belong to invest.yml
-          # — never stage them here, or concurrent invest runs collide on
-          # rebase/push (the two workflows must not interfere; see invest.yml).
-          echo "=== DEBUG: data/active-loans.json ==="
-          python3 -c "import json; d=json.load(open('data/active-loans.json')); print(f'{len(d)} loans in working tree')"
-          git show HEAD:data/active-loans.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{len(d)} loans at HEAD')"
-          echo "=== DEBUG: archive ==="
-          ls -la data/archive/ 2>/dev/null || echo "no archive dir"
+
+          # Scraper owns only its state files. Investment state belongs to
+          # invest.yml and must never be staged here.
           git add data/active-loans.json data/notifications-sent.json \
                   data/notify-state.json data/stats.json data/runs.json \
                   data/archive 2>/dev/null || true
-          echo "=== DEBUG: staged files ==="
+          echo "=== staged files ==="
           git diff --cached --stat
+
           if git diff --cached --quiet; then
             echo "no data change"
           else
             git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')"
-            # Retry loop (same as invest.yml): a concurrent invest push can
-            # transiently reject ours. A skipped push would silently drop the
-            # notify-state update on the ephemeral runner, and the next run
-            # would re-fire duplicate notifications from stale state — so
-            # retry until it lands.
+
+            # git-crypt can leave decrypted tracked files dirty after unlock.
+            # Restore only known encrypted paths; never hide an unexpected
+            # modification. The temporary key is not repository state.
+            dirty_files=$(git diff --name-only)
+            if [ -n "$dirty_files" ]; then
+              while IFS= read -r path; do
+                case "$path" in
+                  .env|i2i-yield-watch-sa.json)
+                    git restore --worktree -- "$path"
+                    ;;
+                  *)
+                    echo "::error::Unexpected dirty file after data commit: $path"
+                    exit 1
+                    ;;
+                esac
+              done <<< "$dirty_files"
+            fi
+            # Re-lock the decrypted tree before leaving the runner. This keeps
+            # the working tree clean without putting credentials in a commit.
+            git-crypt lock 2>/dev/null || true
+            rm -f git-crypt-key
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "::error::Checkout is still dirty before data push"
+              git status --short
+              exit 1
+            fi
+
+            # Never use --autostash here: the prior workflow stashed decrypted
+            # .env, conflicted while applying it, and still returned success.
+            # A green run now means the fresh data reached origin/main.
+            pushed=false
             for i in 1 2 3; do
-              git pull --rebase --autostash origin main && git push && break
+              if git fetch origin main \
+                  && git rebase origin/main \
+                  && git push origin HEAD:main; then
+                pushed=true
+                break
+              fi
               echo "push attempt $i failed, retrying..."
               git rebase --abort 2>/dev/null || true
               sleep 5
             done
+            if [ "$pushed" != true ]; then
+              echo "::error::Scrape data commit was not pushed after 3 attempts"
+              exit 1
+            fi
           fi
-
-      - name: Mark output
-        id: check
-        run: echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Alert on failure (a broken scraper = silent missed notifications)
         if: failure()
@@ -211,9 +189,15 @@ jobs:
 
       - name: Build Pages artifact (_site = dashboard + data)
         run: |
+          set -euo pipefail
           mkdir -p _site
           cp dashboard/index.html dashboard/app.js dashboard/styles.css _site/
           cp -r data _site/data
+          test -s _site/index.html
+          test -s _site/data/active-loans.json
+          test -s _site/data/stats.json
+          echo "Pages artifact data timestamp:"
+          grep -m1 'lastUpdated' _site/data/stats.json || true
 
       - name: Configure Pages
         uses: actions/configure-pages@v6

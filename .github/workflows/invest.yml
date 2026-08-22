@@ -92,10 +92,8 @@ jobs:
           I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # rate gate >100% + credit gate >=720 (no-score imputed 720 and
-          # passes; repo vars override both)
+          # rate gate >100%; credit gate is centralized in src/i2i_watch/config.py
           AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
-          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}
         run: .venv-ci/bin/python -m i2i_watch invest --live --account chirag -v
       - name: Commit invested-loans state (git-as-DB) — chirag
         run: |
@@ -115,14 +113,24 @@ jobs:
             echo "no invest state change"
           else
             git commit -m "data: i2i invested-loans chirag $(date -u +'%F %H:%MZ')"
-            # Retry loop: concurrent scrape pushes can transiently reject ours —
-            # rebase + retry up to 3x before giving up.
+            # A green investment job must mean its dedup/idle state reached
+            # origin. Never let a failed push disappear as a successful run.
+            pushed=false
             for i in 1 2 3; do
-              git pull --rebase --autostash origin main && git push && break
+              if git fetch origin main \
+                  && git rebase origin/main \
+                  && git push origin HEAD:main; then
+                pushed=true
+                break
+              fi
               echo "push attempt $i failed, retrying..."
               git rebase --abort 2>/dev/null || true
               sleep 5
             done
+            if [ "$pushed" != true ]; then
+              echo "::error::Investment state was not pushed after 3 attempts"
+              exit 1
+            fi
           fi
 
       - name: Alert on failure (real-money run must never fail silently)
@@ -172,12 +180,10 @@ jobs:
           I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # same >100% rate gate as chirag + same 720 credit gate (repo vars
-          # override both accounts together; no-score imputed 720 and passes)
+          # same >100% rate gate as chirag; credit gate is centralized in
+          # src/i2i_watch/config.py and applies identically to every account
           AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}
-          AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}
           I2I_NEERU_AUTOINVEST_MIN_RATE_PCT: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_RATE_PCT || '100' }}
-          I2I_NEERU_AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.I2I_NEERU_AUTOINVEST_MIN_CREDIT_SCORE || vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}
         run: .venv-ci/bin/python -m i2i_watch invest --live --account neeru -v
       - name: Commit invested-loans state (git-as-DB) — neeru
         run: |
@@ -192,14 +198,24 @@ jobs:
             echo "no invest state change"
           else
             git commit -m "data: i2i invested-loans neeru $(date -u +'%F %H:%MZ')"
-            # Retry loop: concurrent scrape pushes can transiently reject ours —
-            # rebase + retry up to 3x before giving up.
+            # A green investment job must mean its dedup/idle state reached
+            # origin. Never let a failed push disappear as a successful run.
+            pushed=false
             for i in 1 2 3; do
-              git pull --rebase --autostash origin main && git push && break
+              if git fetch origin main \
+                  && git rebase origin/main \
+                  && git push origin HEAD:main; then
+                pushed=true
+                break
+              fi
               echo "push attempt $i failed, retrying..."
               git rebase --abort 2>/dev/null || true
               sleep 5
             done
+            if [ "$pushed" != true ]; then
+              echo "::error::Investment state was not pushed after 3 attempts"
+              exit 1
+            fi
           fi
 
       - name: Alert on failure (real-money run must never fail silently)

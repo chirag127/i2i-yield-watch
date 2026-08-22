@@ -25,6 +25,7 @@ let countdownInterval = null;
 let refreshCountdown = 300;
 let archiveLoadPromise = null;
 let archiveMonthFilter = null;
+let activeDataLoaded = false;
 
 const filters = {
   interestRateMin: 0,
@@ -139,34 +140,49 @@ async function fetchJson(path) {
 
 async function loadData() {
   const loading = document.getElementById('loading');
-  const grid = document.getElementById('loans-grid');
+  const isInitialLoad = !activeDataLoaded;
 
   try {
-    loading.style.display = 'flex';
-    grid.innerHTML = '';
+    // Keep the last good loan list visible during refresh. A failed request
+    // must never masquerade as a healthy empty market.
+    if (isInitialLoad) loading.style.display = 'flex';
 
-    const [loans, stats] = await Promise.all([
-      fetchJson('./data/active-loans.json').catch(() => []),
-      fetchJson('./data/stats.json').catch(() => ({})),
+    const [loansResult, statsResult] = await Promise.allSettled([
+      fetchJson('./data/active-loans.json'),
+      fetchJson('./data/stats.json'),
     ]);
 
-    const active = Array.isArray(loans)
-      ? loans.filter((l) => (l.status || 'active') === 'active')
-      : [];
+    if (loansResult.status === 'rejected') {
+      const reason = loansResult.reason?.message || 'unknown error';
+      if (!activeDataLoaded) throw new Error(`active loan data unavailable: ${reason}`);
+      document.getElementById('last-updated').textContent = 'STALE · refresh failed';
+      showToast(`Refresh failed; showing last good loan data (${reason})`, 'error');
+    } else {
+      const loans = loansResult.value;
+      const active = Array.isArray(loans)
+        ? loans.filter((l) => (l.status || 'active') === 'active')
+        : [];
 
-    DATASETS.active.raw = active;
-    DATASETS.active.loans = active;
-    allLoans = DATASETS[currentView].loans;
+      DATASETS.active.raw = active;
+      DATASETS.active.loans = active;
+      allLoans = DATASETS[currentView].loans;
+      activeDataLoaded = true;
 
-    const lastUpdated = stats.lastUpdated
-      ? formatDate(stats.lastUpdated)
-      : 'NO DATA';
-    document.getElementById('last-updated').textContent = lastUpdated;
+      if (statsResult.status === 'fulfilled') {
+        const stats = statsResult.value;
+        document.getElementById('last-updated').textContent = stats.lastUpdated
+          ? formatDate(stats.lastUpdated)
+          : 'NO DATA';
+      } else {
+        document.getElementById('last-updated').textContent = 'STALE · stats unavailable';
+      }
 
-    populateProductFilter(DATASETS.active.loans);
-    updateTabCounts();
-    runPipeline();
-    loading.style.display = 'none';
+      populateProductFilter(DATASETS.active.loans);
+      updateTabCounts();
+      runPipeline();
+    }
+
+    if (isInitialLoad) loading.style.display = 'none';
 
     loadArchiveData().catch((err) => {
       console.warn('Archive load failed:', err);
@@ -180,7 +196,7 @@ async function loadData() {
         <p style="font-size:12px;margin-top:6px;
           color:var(--text-muted);
           font-family:var(--font-data)">
-          ${err.message}
+          ${escapeHtml(err.message)}
         </p>
       </div>`;
     showToast('Data load failed: ' + err.message, 'error');
