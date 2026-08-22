@@ -109,26 +109,19 @@ jobs:
           else
             git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')"
 
-            # git-crypt can leave decrypted tracked files dirty after unlock.
-            # Restore only known encrypted paths; never hide an unexpected
-            # modification. The temporary key is not repository state.
+            # git-crypt leaves the decrypted .env marked modified after the
+            # scraper uses it. Stash only that runtime secret on the ephemeral
+            # runner; it is never staged, committed, pushed, or reapplied.
+            # Any other dirty file is unexpected and must fail visibly.
             dirty_files=$(git diff --name-only)
-            if [ -n "$dirty_files" ]; then
-              while IFS= read -r path; do
-                case "$path" in
-                  .env|i2i-yield-watch-sa.json)
-                    git restore --worktree -- "$path"
-                    ;;
-                  *)
-                    echo "::error::Unexpected dirty file after data commit: $path"
-                    exit 1
-                    ;;
-                esac
-              done <<< "$dirty_files"
+            unexpected_dirty=$(printf '%s\n' "$dirty_files" | sed '/^$/d;/^\.env$/d;/^i2i-yield-watch-sa\.json$/d')
+            if [ -n "$unexpected_dirty" ]; then
+              echo "::error::Unexpected dirty file after data commit: $unexpected_dirty"
+              exit 1
             fi
-            # Re-lock the decrypted tree before leaving the runner. This keeps
-            # the working tree clean without putting credentials in a commit.
-            git-crypt lock 2>/dev/null || true
+            if [ -n "$dirty_files" ]; then
+              git stash push --quiet -m "runtime git-crypt secret; never apply" -- .env i2i-yield-watch-sa.json || true
+            fi
             rm -f git-crypt-key
             if [ -n "$(git status --porcelain)" ]; then
               echo "::error::Checkout is still dirty before data push"
@@ -136,9 +129,9 @@ jobs:
               exit 1
             fi
 
-            # Never use --autostash here: the prior workflow stashed decrypted
-            # .env, conflicted while applying it, and still returned success.
-            # A green run now means the fresh data reached origin/main.
+            # Do not use pull --autostash: it previously conflicted while
+            # applying the decrypted .env and still returned success. A green
+            # run now means the fresh data reached origin/main.
             pushed=false
             for i in 1 2 3; do
               if git fetch origin main \
