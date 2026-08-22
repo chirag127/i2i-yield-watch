@@ -117,14 +117,21 @@ jobs:
             # origin. Never let a failed push disappear as a successful run.
             pushed=false
             for i in 1 2 3; do
+              # -X theirs: data/invest-idle.json is last-writer-wins state shared
+              # by both account jobs; on a concurrent push, the remote copy is
+              # newer and our own idle state is regenerated next run anyway.
+              # Without it the rebase re-conflicts every retry (observed
+              # 2026-08-22: neeru failed all 3 attempts on invest-idle.json).
               if git fetch origin main \
-                  && git rebase origin/main \
+                  && git rebase -X theirs origin/main \
                   && git push origin HEAD:main; then
                 pushed=true
                 break
               fi
               echo "push attempt $i failed, retrying..."
-              git rebase --abort 2>/dev/null || true
+              if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+                git rebase --abort
+              fi
               sleep 5
             done
             if [ "$pushed" != true ]; then
@@ -202,14 +209,21 @@ jobs:
             # origin. Never let a failed push disappear as a successful run.
             pushed=false
             for i in 1 2 3; do
+              # -X theirs: data/invest-idle.json is last-writer-wins state shared
+              # by both account jobs; on a concurrent push, the remote copy is
+              # newer and our own idle state is regenerated next run anyway.
+              # Without it the rebase re-conflicts every retry (observed
+              # 2026-08-22: neeru failed all 3 attempts on invest-idle.json).
               if git fetch origin main \
-                  && git rebase origin/main \
+                  && git rebase -X theirs origin/main \
                   && git push origin HEAD:main; then
                 pushed=true
                 break
               fi
               echo "push attempt $i failed, retrying..."
-              git rebase --abort 2>/dev/null || true
+              if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+                git rebase --abort
+              fi
               sleep 5
             done
             if [ "$pushed" != true ]; then
