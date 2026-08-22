@@ -166,9 +166,19 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          set +e
           [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          MSG="⚠️ <b>i2i SCRAPER run FAILED</b>%0ANotifications may be paused until the next good run.%0A${RUN_URL}"
+          # Self-identifying alert: an alert for an OLD failed run must never
+          # look like a live failure. Include run start time + failing step.
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
+          FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
+          # Consecutive failures: count completed runs since the last green one
+          # so a bad streak doesn't spam identical alerts (still loud on the first).
+          CONSEC=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${GITHUB_WORKFLOW}" --limit 10 --json conclusion \
+            --jq '[.[] | select(.conclusion == "failure" or .conclusion == "success")] | .[1:] | .[0:index(. == "success")] | length' 2>/dev/null || echo 0)
+          MSG="⚠️ <b>i2i SCRAPER run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0AConsecutive failures: ${CONSEC}%0ANotifications may be paused until the next good run.%0A${RUN_URL}"
           curl -sS --max-time 20 -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
