@@ -5,6 +5,7 @@ monkeypatched transports so no network is touched.
 """
 
 import json
+import urllib.error
 
 import pytest
 
@@ -18,6 +19,7 @@ from i2i_watch import bot
     ("/scrape", "/scrape"),
     ("/status", "/status"),
     ("/help", "/help"),
+    ("/start", "/start"),
     ("/ping", "/ping"),
     ("/wallet", "/wallet"),
     ("/digest", "/digest"),
@@ -34,6 +36,49 @@ def test_parse_command(text, expected):
     assert bot.parse_command(text) == expected
 
 
+# ── command menu (setMyCommands) ────────────────────────────────────────────
+
+def test_command_menu_has_all_commands_no_slashes():
+    menu = bot.command_menu()
+    assert [m["command"] for m in menu] == [
+        c.lstrip("/") for c in bot.COMMANDS
+    ]
+    assert all("/" not in m["command"] for m in menu)
+    assert all(m["description"] for m in menu)
+
+
+def test_register_commands_posts_setmycommands(monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return b'{"ok": true, "result": true}'
+
+    def fake_urlopen(req, timeout=20):
+        captured["url"] = req.full_url
+        captured["body"] = req.data.decode("utf-8")
+        return FakeResp()
+
+    monkeypatch.setattr(bot.urllib.request, "urlopen", fake_urlopen)
+    bot.register_commands("tok")
+    assert "setMyCommands" in captured["url"]
+    payload = json.loads(captured["body"])
+    assert len(payload["commands"]) == len(bot.COMMANDS)
+    assert payload["commands"][0] == {"command": "start", "description": "show commands / how to use the bot"}
+
+
+def test_register_commands_raises_on_http_error(monkeypatch):
+    def boom(*a, **k):
+        raise urllib.error.HTTPError("u", 400, "bad", {}, None)
+    monkeypatch.setattr(bot.urllib.request, "urlopen", boom)
+    with pytest.raises(RuntimeError):
+        bot.register_commands("tok")
+
+
 # ── is_owner ─────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("chat_id,allowed,expected", [
@@ -42,6 +87,10 @@ def test_parse_command(text, expected):
     ("123", "456", False),
     ("123", None, False),
     ("123", "", False),
+    ("123", "123,456", True),     # comma-separated co-owners
+    ("456", "123,456", True),
+    ("789", "123,456", False),
+    ("123", " 123 , 456 ", True),  # whitespace tolerated
 ])
 def test_is_owner(chat_id, allowed, expected):
     assert bot.is_owner(chat_id, allowed) is expected
@@ -66,9 +115,12 @@ def test_dispatch_url_quotes_workflow():
 def test_build_help_lists_all_commands():
     help_text = bot.build_help()
     for cmd in bot.COMMANDS:
+        if cmd == "/start":  # /start is an alias for /help, not listed in it
+            continue
         assert cmd in help_text
     assert "/invest" in help_text
     assert "REAL-MONEY" in help_text
+    assert "/" in help_text  # hints to type / to see the menu
 
 
 # ── build_status_reply ───────────────────────────────────────────────────────
@@ -123,11 +175,12 @@ def test_handle_unknown_returns_help():
     assert "/invest" in reply  # help text
 
 
-def test_handle_help_no_dispatch(monkeypatch):
+@pytest.mark.parametrize("cmd", ["/help", "/start"])
+def test_handle_help_no_dispatch(monkeypatch, cmd):
     def boom(*a):
-        raise AssertionError("must not dispatch for /help")
+        raise AssertionError(f"must not dispatch for {cmd}")
     monkeypatch.setattr(bot, "dispatch", boom)
-    bot.handle("/help", "o/r", "tok")
+    bot.handle(cmd, "o/r", "tok")
 
 
 def test_handle_status_no_dispatch(monkeypatch):

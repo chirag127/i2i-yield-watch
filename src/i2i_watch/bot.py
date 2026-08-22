@@ -32,6 +32,7 @@ GITHUB_API = "https://api.github.com"
 
 # command -> metadata. `workflow: None` = local reply only (no dispatch).
 COMMANDS: dict[str, dict] = {
+    "/start": {"workflow": None, "help": "show commands / how to use the bot"},
     "/invest": {"workflow": "invest.yml", "help": "run the REAL-MONEY auto-invest right now"},
     "/scrape": {"workflow": "scrape.yml", "help": "force a fresh market scrape + notifications"},
     "/wallet": {"workflow": "wallet-check.yml", "help": "check investable escrow balance"},
@@ -43,6 +44,50 @@ COMMANDS: dict[str, dict] = {
 }
 
 
+def command_menu() -> list[dict]:
+    """Telegram Bot API setMyCommands payload: command -> short description.
+
+    Commands are shown in the chat's command menu when the user types "/"
+    ("Menu" button in the message field). Descriptions are truncated to
+    Telegram's 256-char limit defensively.
+    """
+    return [
+        {"command": cmd.lstrip("/"), "description": meta["help"][:256]}
+        for cmd, meta in COMMANDS.items()
+    ]
+
+
+def register_commands(token: str) -> None:
+    """Register the slash-command menu with Telegram (setMyCommands).
+
+    Idempotent: safe to call every poll cycle. Raises on failure so callers
+    can decide whether to keep going.
+    """
+    body = json.dumps({"commands": command_menu()}).encode("utf-8")
+    url = TELEGRAM_API.format(token=token, method="setMyCommands")
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"setMyCommands failed: HTTP {e.code}") from e
+    if not data.get("ok"):
+        raise RuntimeError(f"setMyCommands failed: {data}")
+
+
+def build_help(include_howto: bool = True) -> str:
+    """Human-readable command list; optionally with a quick how-to header."""
+    lines = ["<b>i2i bot commands</b>"]
+    if include_howto:
+        lines.append("Type <code>/</code> in any chat to see this menu.")
+    for cmd, meta in COMMANDS.items():
+        if cmd == "/start":
+            continue
+        lines.append(f"<code>{cmd}</code> — {meta['help']}")
+    return "\n".join(lines)
+
+
 def parse_command(text: str) -> str | None:
     """Normalize a message into a known command key (e.g. '/invest')."""
     t = (text or "").strip().lower()
@@ -50,8 +95,15 @@ def parse_command(text: str) -> str | None:
 
 
 def is_owner(chat_id: object, allowed: object) -> bool:
-    """Only the configured owner chat may trigger real-money workflows."""
-    return allowed is not None and str(chat_id) == str(allowed)
+    """Only the configured owner chat(s) may trigger real-money workflows.
+
+    `allowed` may be a single chat id or a comma-separated list (for a second
+    phone / co-owner). None or empty -> nobody is the owner.
+    """
+    if allowed is None:
+        return False
+    wanted = {a.strip() for a in str(allowed).split(",") if a.strip()}
+    return str(chat_id) in wanted
 
 
 def dispatch_url(repo: str, workflow: str) -> str:
@@ -152,7 +204,7 @@ def send_message(token: str, chat_id: str, text: str) -> None:
 
 def handle(cmd: str | None, repo: str, gh_token: str, stats_path: str | None = None) -> str:
     """Dispatch a command and return the reply text. cmd None -> help hint."""
-    if cmd is None or cmd == "/help":
+    if cmd is None or cmd in ("/help", "/start"):
         return build_help()
     meta = COMMANDS[cmd]
     if meta["workflow"] is None:
@@ -220,6 +272,15 @@ def main(argv: list[str] | None = None) -> int:
     if not token or not chat_id:
         print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID unset — idle", file=sys.stderr)
         return 0
+
+    # Register the slash-command menu once per job so the user sees all
+    # commands when typing "/". Non-fatal: typed commands still work even if
+    # this fails (e.g. Telegram API hiccup).
+    try:
+        register_commands(token)
+        print("registered command menu with Telegram", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"command-menu registration failed (non-fatal): {e}", file=sys.stderr)
 
     acted_total = 0
     failures = 0

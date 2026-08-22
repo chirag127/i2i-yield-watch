@@ -95,15 +95,35 @@ Message the same bot to **re-trigger workflows on demand** — no need to wait f
 
 | Command | What it does |
 |---|---|
+| `/start`, `/help` | shows the command list |
 | `/invest` | runs the REAL-MONEY auto-invest immediately (both accounts) |
 | `/scrape` | forces a fresh market scrape + notifications |
 | `/wallet` | checks investable escrow balance (all accounts) |
 | `/digest` | sends the portfolio digest |
 | `/emireport` | refreshes the EMI-status snapshot |
 | `/status` | replies with the latest dashboard stats (no dispatch) |
-| `/help` | lists commands |
+| `/ping` | liveness check |
 
-Only the owner's chat (the configured `TELEGRAM_CHAT_ID`) can trigger real-money commands. The workflow long-polls Telegram `getUpdates` (~50 s/iteration, self-looping inside each 5-min cron window) so commands are answered within about a minute while a job is alive; dispatching uses `GITHUB_TOKEN` with `actions: write` (per GitHub docs, `workflow_dispatch` triggered by `GITHUB_TOKEN` *does* create a run). The last processed update_id is persisted in `data/telegram-bot-state.json` (git-as-DB), so a crashed run never re-dispatches an old command.
+Every command also appears in the **slash menu** — type `/` in the chat (or tap the *Menu* button next to the input field) and Telegram shows all commands with their descriptions. The menu is registered automatically by the bot job via `setMyCommands` on every run.
+
+#### Setup (one-time)
+
+1. **Create the bot** — in Telegram, message `@BotFather` → `/newbot` → pick a name and username (e.g. `i2i_yield_bot`). BotFather replies with a `123456:ABC-DEF...` **token**. You can also run `/setdescription` and `/setabouttext` there to polish the bot's profile.
+2. **Get your chat id** — message your new bot anything (e.g. `/start`), then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser; the `chat.id` in the JSON is your `TELEGRAM_CHAT_ID`. (A simpler path: message `@userinfobot` and read the id it replies with.)
+3. **Store the secrets** on GitHub:
+   ```bash
+   gh secret set TELEGRAM_BOT_TOKEN --repo chirag127/i2i-yield-watch
+   gh secret set TELEGRAM_CHAT_ID    --repo chirag127/i2i-yield-watch
+   ```
+4. **Wait for the next `telegram-bot.yml` run (≤5 min) or dispatch it once:**
+   ```bash
+   gh workflow run "i2i Telegram Command Bot" --repo chirag127/i2i-yield-watch
+   ```
+   The run registers the command menu and starts long-polling. Now send `/invest` from *your* chat and the bot replies with the dispatch link within ~a minute.
+
+**Security:** only the chat whose id equals `TELEGRAM_CHAT_ID` can trigger real-money workflows — anyone else's messages are read and ignored (the offset is still advanced, so foreign messages don't block yours). To add a second phone, put both chat ids in the secret, comma-separated.
+
+**How it stays alive:** the workflow long-polls `getUpdates` (~50 s/iteration, self-looping inside each 5-min cron window) so commands are answered within about a minute while a job is alive; dispatching uses `GITHUB_TOKEN` with `actions: write` (per GitHub docs, `workflow_dispatch` triggered by `GITHUB_TOKEN` *does* create a run). The last processed update_id is persisted in `data/telegram-bot-state.json` (git-as-DB), so a crashed run never re-dispatches an old command.
 
 ### CI — GitHub Actions (`scrape.yml`)
 
