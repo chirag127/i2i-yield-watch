@@ -13,8 +13,13 @@ on:
   # re-scrape — a self-triggering chain that made the effective interval ~0,
   # queued runs behind each other in the concurrency group, and collided with
   # invest.yml's real-money pushes. The schedule + workflow_dispatch above are
-  # the only triggers; the effective scrape interval is now exactly the cron
+  # the only triggers; the effective scrape interval is exactly the cron
   # cadence (15 min), and the deploy job still updates Pages after each run.
+  #
+  # 5-MIN EFFECTIVE CADENCE: each run self-loops 3 iterations at 300s apart
+  # (t=0, t=5, t=10) inside the 15-min cron window — so a new loan is noticed
+  # at worst ~5 min after posting, without fighting GitHub's cron throttling
+  # (a `*/5` cron degrades to ~hourly and is dropped).
   workflow_dispatch:
     inputs:
       reset_notify_state:
@@ -128,11 +133,12 @@ jobs:
           # every N hours so a stable market never goes silent forever.
           I2I_DIGEST_HOURS: '6'
           STARTUP_JITTER_MS: '2000'
-          # Self-loop: one run polls several times ~60s apart to approximate
-          # 5-min cadence even when GitHub fires only every 15-30 min. Each
-          # iteration diffs against the storage the previous iteration wrote,
-          # so notifications chain correctly and stay near-real-time.
-        run: .venv-ci/bin/python -m i2i_watch --iterations 2 --interval 90 -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
+          # Self-loop: 3 iterations 300s (5 min) apart fills the 15-min cron
+          # window (t=0, t=5, t=10) -> a new loan is caught within ~5 min of
+          # posting. Each iteration diffs against the storage the previous
+          # iteration wrote, so notifications chain correctly and stay
+          # near-real-time without re-sending already-notified loans.
+        run: .venv-ci/bin/python -m i2i_watch --iterations 3 --interval 300 -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
       - name: Commit updated data (state persistence — dedup across runs)
         run: |
