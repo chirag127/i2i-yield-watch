@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from i2i_watch import config as C
+
 
 ROOT = Path(__file__).parents[1]
 
@@ -20,11 +22,12 @@ def test_scraper_notification_overrides_match_policy():
 def test_investment_overrides_match_policy():
     workflow = _text("invest.yml")
     assert workflow.count("|| '100'") >= 3
-    assert workflow.count("|| '720'") >= 2
     assert "I2I_NEERU_AUTOINVEST_MIN_RATE_PCT" in workflow
+    assert "AUTOINVEST_MIN_CREDIT_SCORE" not in workflow
+    assert C.AUTOINVEST_MIN_CREDIT_SCORE == 700.0
 
 
 def test_digest_cannot_lower_the_real_money_gate():
     workflow = _text("digest.yml")
     assert "AUTOINVEST_MIN_RATE_PCT: ${{ vars.AUTOINVEST_MIN_RATE_PCT || '100' }}" in workflow
-    assert "AUTOINVEST_MIN_CREDIT_SCORE: ${{ vars.AUTOINVEST_MIN_CREDIT_SCORE || '720' }}" in workflow
+    assert "AUTOINVEST_MIN_CREDIT_SCORE" not in workflow

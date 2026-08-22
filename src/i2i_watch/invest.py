@@ -30,6 +30,7 @@ from . import config as C
 from . import storage
 from .client import I2iClient, to_float
 from .notify.channels import send_telegram_text
+from .transform import build_loan_url
 from .util import tenure_months
 
 log = logging.getLogger("i2i_watch")
@@ -80,7 +81,7 @@ def select(loans: list[dict], min_rate: float = C.AUTOINVEST_MIN_RATE_PCT,
     >= min_score, ranked by importance: rate desc, then credit score desc
     (no credit -> imputed NO_CREDIT_IMPUTED_SCORE, the high-risk band), then
     tenure desc. Field names per config (HAR-verified). No-credit loans are
-    imputed NO_CREDIT_IMPUTED_SCORE (720), which meets the default min_score=720
+    imputed NO_CREDIT_IMPUTED_SCORE (720), which meets the default min_score=700
     gate — a missing bureau file is NOT treated as a 0 and is NOT filtered out,
     but ranks as High Risk / High Uncertainty below any real 750+ score."""
     out = []
@@ -236,6 +237,7 @@ def _plan(client: I2iClient, sel: list[dict], wallet0: float) -> list[dict]:
             "score": s["score"],
             "noCredit": s.get("noCredit", False),
             "amount": amt,
+            "loanUrl": build_loan_url(s.get("borrowerUserId"), lid),
             "payload": build_invest_payload(d, amt, s["rate"]),
         })
         seen.add(str(lid))
@@ -367,7 +369,14 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
                 + (f"Placed Rs {invested:,.0f} in {len(placed)} loan(s) this run; "
                    f"{remaining_loans} qualifying loan(s) still need funding.\n" if placed
                    else f"Placed nothing this run; {remaining_loans} qualifying loan(s) waiting on balance.\n")
-                + (f"i2i said: <i>{low_balance_msg}</i>" if low_balance_msg else "")
+                + "\n".join(
+                    f'• <a href="{p["loanUrl"]}">Loan {p["loanId"]}</a>: '
+                    f'Rs {p["amount"]:,.0f} planned'
+                    if p.get("loanUrl") else
+                    f'• Loan {p["loanId"]}: Rs {p["amount"]:,.0f} planned'
+                    for p in plan if p not in placed
+                )
+                + (f"\ni2i said: <i>{low_balance_msg}</i>" if low_balance_msg else "")
             )
         except Exception:  # noqa: BLE001
             log.warning("failed to send add-balance Telegram alert")
@@ -379,7 +388,9 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
                  f"{len(placed)} loan(s)</b> (&gt;{gate:.0f}%)"]
         for p in placed:
             cs = "⚠ no credit score (high risk)" if p.get("noCredit") else f"score {p['score']:.0f}"
-            lines.append(f"• Loan {p['loanId']}: {p['rate']:.2f}% "
+            loan_name = (f'<a href="{p["loanUrl"]}">Loan {p["loanId"]}</a>'
+                         if p.get("loanUrl") else f"Loan {p['loanId']}")
+            lines.append(f"• {loan_name}: {p['rate']:.2f}% "
                          f"{cs} — Rs {p['amount']:,.0f}")
         try:
             send_telegram_text("\n".join(lines), silent=True)
@@ -397,9 +408,7 @@ def run(live: bool = False, account: str | None = None) -> int:
     Returns a process rc."""
     acct = account or accounts.active_account()
     gate = accounts.get_float(acct, "AUTOINVEST_MIN_RATE_PCT", C.AUTOINVEST_MIN_RATE_PCT)
-    credit_gate = accounts.get_float(
-        acct, "AUTOINVEST_MIN_CREDIT_SCORE", C.AUTOINVEST_MIN_CREDIT_SCORE
-    )
+    credit_gate = C.AUTOINVEST_MIN_CREDIT_SCORE
 
     from .sources.i2i import fetch_all_loans
     try:
@@ -531,15 +540,14 @@ def show_config() -> int:
     print("=== effective config (env -> account override -> default) ===")
     for acct in accounts.account_names():
         rate = accounts.get_float(acct, "AUTOINVEST_MIN_RATE_PCT", C.AUTOINVEST_MIN_RATE_PCT)
-        credit = accounts.get_float(acct, "AUTOINVEST_MIN_CREDIT_SCORE", C.AUTOINVEST_MIN_CREDIT_SCORE)
+        credit = C.AUTOINVEST_MIN_CREDIT_SCORE
         topup = accounts.get_float(acct, "TOPUP_MIN_RATE_PCT", C.TOPUP_MIN_RATE_PCT)
         print(f"  account={acct}: rate >{rate:.0f}% | credit >= {credit:.0f} "
               f"(no-score imputed {C.NO_CREDIT_IMPUTED_SCORE:.0f}) | top-up >{topup:.0f}%")
     print(f"  per-loan cap: Rs {C.PER_LOAN_CAP:,.0f} | min invest: Rs {C.INVEST_MIN_AMOUNT:,.0f} "
           f"| idle watchdog: {C.IDLE_WATCHDOG_DAYS:.0f}d | notify gates: >{C.NOTIFY_MIN_RATE_PCT:.0f}% "
           f"(loud >{C.NOTIFY_HIGH_RATE_PCT:.0f}%)")
-    print(f"  repo vars override in CI (AUTOINVEST_MIN_RATE_PCT / "
-          f"AUTOINVEST_MIN_CREDIT_SCORE) — not visible from a local shell")
+    print("  credit gate is centralized in config.py")
     return 0
 
 
@@ -575,7 +583,7 @@ def portfolio_digest(account: str | None = None) -> int:
             from .sources.i2i import fetch_all_loans
             loans = fetch_all_loans()
             rate = accounts.get_float(acct, "AUTOINVEST_MIN_RATE_PCT", C.AUTOINVEST_MIN_RATE_PCT)
-            credit = accounts.get_float(acct, "AUTOINVEST_MIN_CREDIT_SCORE", C.AUTOINVEST_MIN_CREDIT_SCORE)
+            credit = C.AUTOINVEST_MIN_CREDIT_SCORE
             misses = len(credit_near_misses(loans, rate, credit))
             lines.append(
                 f"• <b>{acct}</b>: escrow Rs {wallet:,.0f} | {invested} loan(s) invested "
