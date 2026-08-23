@@ -28,6 +28,7 @@ from . import config as C
 from .client import I2iClient
 from .invest import select
 from .notify.channels import send_telegram_text
+from .transform import build_loan_url
 
 log = logging.getLogger("i2i_watch")
 
@@ -106,7 +107,10 @@ def build_topup_message(sel: list[dict], amount: float, payment_ref: str,
     lines = [f"🔝 <b>i2i top-up: approve ₹{amount:,.0f}</b>"]
     lines.append(f"{len(sel)} loan(s) above the top-up gate:")
     for s in sel[:10]:
-        lines.append(f"• Loan {s['loanId']}: {s['rate']:.2f}% — ₹{s['amtLeft']:,.0f} left")
+        url = build_loan_url(s.get("borrowerUserId"), s["loanId"])
+        name = (f'<a href="{url}">Loan {s["loanId"]}</a>'
+                if url else f"Loan {s['loanId']}")
+        lines.append(f"• {name}: {s['rate']:.2f}% — ₹{s['amtLeft']:,.0f} left")
     if payment_ref:
         lines.append(f"\n{payment_ref}")
     if upi_id:

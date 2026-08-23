@@ -14,9 +14,14 @@ def _text(name: str) -> str:
 
 def test_scraper_notification_overrides_match_policy():
     workflow = _text("scrape.yml")
-    assert "NOTIFY_MIN_RATE_PCT: '40'" in workflow
-    assert "NOTIFY_HIGH_RATE_PCT: '100'" in workflow
-    assert "STARTUP_JITTER_MS: '2000'" in workflow
+    assert "POLL_INTERVAL_S: '300'" in workflow
+    assert "POLL_ITERATIONS: '3'" in workflow
+    assert "--iterations ${{ vars.POLL_ITERATIONS || '3' }} --interval ${{ vars.POLL_INTERVAL_S || '300' }}" in workflow
+    assert "NOTIFY_MIN_RATE_PCT: ${{ vars.NOTIFY_MIN_RATE_PCT || '40' }}" in workflow
+    assert "NOTIFY_BUCKET_MIN_RATE_PCT: ${{ vars.NOTIFY_BUCKET_MIN_RATE_PCT || '30' }}" in workflow
+    assert "NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}" in workflow
+    assert "I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS || '6' }}" in workflow
+    assert "STARTUP_JITTER_MS: ${{ vars.STARTUP_JITTER_MS || '2000' }}" in workflow
 
 
 def test_investment_overrides_match_policy():

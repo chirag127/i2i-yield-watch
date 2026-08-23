@@ -223,7 +223,10 @@ def format_loan_block(loan: dict) -> list[str]:
     if fund_pieces:
         lines.append(" · ".join(fund_pieces))
 
-    # 4. Credit + Risk
+    # 4. Product + Credit + Risk
+    product_pieces = []
+    if not is_na(loan.get("product")):
+        product_pieces.append(str(loan["product"]))
     credit_pieces = []
     if not is_na(loan.get("creditScore")):
         credit_pieces.append(f"Credit {loan['creditScore']}")
@@ -231,8 +234,8 @@ def format_loan_block(loan: dict) -> list[str]:
         credit_pieces.append("⚠ No credit score (high risk)")
     if not is_na(loan.get("riskCategory")):
         credit_pieces.append(f"Risk {loan['riskCategory']}")
-    if credit_pieces:
-        lines.append(" · ".join(credit_pieces))
+    if product_pieces or credit_pieces:
+        lines.append(" · ".join(product_pieces + credit_pieces))
 
     # 5. Borrower
     borrower_pieces = []

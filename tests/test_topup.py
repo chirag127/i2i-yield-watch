@@ -69,12 +69,15 @@ def test_build_checkout_page_autosubmits_form():
     assert T.build_checkout_page("nope") == ""
 
 
-def test_build_topup_message_includes_amount_upi():
-    msg = T.build_topup_message(_sel((150.0, 5000.0)), 5000.0, "",
+def test_build_topup_message_includes_amount_upi_and_loan_link():
+    sel = _sel((150.0, 5000.0))
+    sel[0]["borrowerUserId"] = "1304413"
+    msg = T.build_topup_message(sel, 5000.0, "",
                                 upi_id="chirag@okbank")
     assert "5,000" in msg
     assert "chirag@okbank" in msg
     assert "150.00%" in msg
+    assert 'href="https://www.i2ifunding.com/borrower/listing/public-profile/1304413/1"' in msg
 
 
 def test_build_topup_message_upi_hint_with_checkout_url():

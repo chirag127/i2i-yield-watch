@@ -140,7 +140,8 @@ def test_loud_tier_alerts_new_high_loan_even_when_standard_unchanged(
     sent_loud = []
 
     def fake_send_text(text, silent=False):
-        sent_loud.append(text)
+        if not silent:
+            sent_loud.append(text)
         return True
 
     monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
@@ -164,19 +165,20 @@ def test_loud_tier_alerts_new_high_loan_even_when_standard_unchanged(
 
 def test_loud_tier_labels_credit_skip_honestly(json_backend, capture_notify, monkeypatch):
     """The loud-tier 'AUTO-INVEST CANDIDATE' alert must label a >100% loan with
-    sub-720 credit as SKIP (the investor applies the credit gate, so announcing
+    sub-700 credit as SKIP (the investor applies the credit gate, so announcing
     it as a pure candidate would be a lie)."""
     sent_loud = []
 
     def fake_send_text(text, silent=False):
-        sent_loud.append(text)
+        if not silent:
+            sent_loud.append(text)
         return True
 
     monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
 
-    # >100% loan with low credit (600): flagged as SKIP, not "will invest"
+    # >100% loan with low credit (699): flagged as SKIP, not "will invest"
     low = _loan("21", 130)
-    low["usr_cibil_score"] = "600"
+    low["usr_cibil_score"] = "699"
     pipeline.run(raw_rows=[low])
     assert len(sent_loud) == 1
     assert "will invest" not in sent_loud[0]
@@ -194,7 +196,8 @@ def test_loud_tier_does_not_respam_existing_high_loan(json_backend, capture_noti
     sent_loud = []
 
     def fake_send_text(text, silent=False):
-        sent_loud.append(text)
+        if not silent:
+            sent_loud.append(text)
         return True
 
     monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
@@ -208,7 +211,8 @@ def test_loud_tier_high_gate_from_env(json_backend, capture_notify, monkeypatch)
     sent_loud = []
 
     def fake_send_text(text, silent=False):
-        sent_loud.append(text)
+        if not silent:
+            sent_loud.append(text)
         return True
 
     monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
@@ -216,6 +220,80 @@ def test_loud_tier_high_gate_from_env(json_backend, capture_notify, monkeypatch)
     assert sent_loud == []
     pipeline.run(raw_rows=[_loan("9", 160)])  # >150 -> loud
     assert len(sent_loud) == 1
+
+
+def test_bucket_boundaries_and_snapshot():
+    rows = [
+        {"loanId": "30", "interestRate": 30.0},
+        {"loanId": "31", "interestRate": 30.01},
+        {"loanId": "40", "interestRate": 40.0},
+        {"loanId": "50", "interestRate": 50.0},
+        {"loanId": "70", "interestRate": 70.0},
+        {"loanId": "100", "interestRate": 100.0},
+        {"loanId": "101", "interestRate": 100.01},
+    ]
+    snapshot = pipeline._bucket_snapshot(rows)
+    assert snapshot["30-40"] == ["31"]
+    assert snapshot["40-50"] == ["40"]
+    assert snapshot["50-70"] == ["50"]
+    assert snapshot["70-100"] == ["70"]
+    assert snapshot["100+"] == ["100", "101"]
+
+
+def test_bucket_summary_is_silent_change_only_and_has_new_links(
+        json_backend, capture_notify, monkeypatch):
+    bucket_messages = []
+
+    def fake_send_text(text, silent=False):
+        if silent:
+            bucket_messages.append(text)
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+    first = _loan("30", 30.01)
+    first["pl_user_id"] = "88030"
+    pipeline.run(raw_rows=[first])
+    assert len(bucket_messages) == 1
+    assert "30-40" in bucket_messages[0]
+    assert "88030/30" in bucket_messages[0]
+
+    pipeline.run(raw_rows=[first])
+    assert len(bucket_messages) == 1
+
+    second = _loan("40", 40.0)
+    second["pl_user_id"] = "88040"
+    pipeline.run(raw_rows=[first, second])
+    assert len(bucket_messages) == 2
+    assert "88040/40" in bucket_messages[-1]
+    assert "88030/30" not in bucket_messages[-1]
+
+
+def test_bucket_summary_retries_after_failed_delivery(json_backend, capture_notify, monkeypatch):
+    attempts = []
+
+    def fake_send_text(_text, silent=False):
+        if silent:
+            attempts.append(1)
+            return len(attempts) > 1
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+    loan = _loan("31", 31)
+    pipeline.run(raw_rows=[loan])
+    assert len(attempts) == 1
+    assert storage.load_notify_state().get("buckets", {}) == {}
+    pipeline.run(raw_rows=[loan])
+    assert len(attempts) == 2
+    assert storage.load_notify_state()["buckets"]["30-40"] == ["31"]
+
+
+def test_notify_state_merges_tiers(json_backend):
+    storage.save_notify_state(["q"], notified_at="2000-01-01T00:00:00Z", high_ids=["h"])
+    storage.save_notify_state(["q2"], buckets={"30-40": ["b"]})
+    state = storage.load_notify_state()
+    assert state["qualifyingIds"] == ["q2"]
+    assert state["highIds"] == ["h"]
+    assert state["buckets"] == {"30-40": ["b"]}
 
 
 def test_digest_helpers(monkeypatch):

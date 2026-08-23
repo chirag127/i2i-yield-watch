@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![Auto Scraper](https://github.com/chirag127/i2i-yield-watch/actions/workflows/scrape.yml/badge.svg)](https://github.com/chirag127/i2i-yield-watch/actions/workflows/scrape.yml)
 
-**What it is.** A hands-off watcher for the [i2iFunding](https://www.i2ifunding.com/) P2P lending marketplace. Every 15 minutes it scrapes the public borrower listing, scores each loan by yield/credit/priority, and alerts Telegram on newly-qualifying loans. State lives entirely in committed JSON files (git-as-DB) — no external database. An optional **real-money auto-investor** can place and reverse investments, gated safe-off by default.
+**What it is.** A hands-off watcher for the [i2iFunding](https://www.i2ifunding.com/) P2P lending marketplace. Every 15 minutes a GitHub Actions run performs three scraper passes at approximately five-minute spacing, scores each loan by yield/credit/priority, and alerts Telegram on newly-qualifying loans. State lives entirely in committed JSON files (git-as-DB) — no external database. An optional **real-money auto-investor** can place and reverse investments, gated safe-off by default.
 
 - **Live dashboard:** https://chirag127.github.io/i2i-yield-watch/
 - **GHP landing:** https://chirag127.github.io/i2i-yield-watch/
@@ -64,7 +64,7 @@ State is stored as JSON files in `data/`, committed back to `main` after every C
 | File | Contents |
 |------|----------|
 | `data/active-loans.json` | Current active loan list (array) |
-| `data/notify-state.json` | Last notified qualifying-loan set + timestamp |
+| `data/notify-state.json` | Last detailed, loud-tier, and silent-bucket notification state |
 | `data/stats.json` | Aggregate counters (avgRate, highPriorityCount, …) |
 | `data/runs.json` | Last 200 run summaries |
 | `data/notifications-sent.json` | All-time notified loan IDs (dedup) |
@@ -78,6 +78,7 @@ Set `I2I_STORAGE=firebase` to re-enable Firestore (requires `FIREBASE_SA_JSON` s
 Single Telegram bot `oriz127_bot`. Notify logic:
 
 - **NEW loans only** — a loan is announced once, the first time it appears AND its rate exceeds `NOTIFY_MIN_RATE_PCT` (default 40%). Loan IDs are persisted in `data/notify-state.json`; the set never re-notifies an already-seen ID.
+- **Silent bucket summary** — loans above 30% are grouped into `30–40`, `40–50`, `50–70`, `70–100`, and `100+` buckets. A quiet Telegram summary is sent only when a bucket's membership/count changes; links are included only for loans newly entering a bucket.
 - **LOUD tier** — any loan with rate **> `NOTIFY_HIGH_RATE_PCT`** (default 100) fires an immediate loud alert the moment it appears (or crosses the threshold), independent of the standard change-only tier — so a fresh >100% auto-invest candidate never goes unnoticed.
 - **Qualifying-set change** — if the set of loans above the threshold changes (any loan added or dropped), a summary fires.
 - **Periodic digest** — if `I2I_DIGEST_HOURS` is set, a full digest fires that often regardless of change.
@@ -132,8 +133,8 @@ Dispatching uses `GITHUB_TOKEN` with `actions: write` (per GitHub docs, `workflo
 
 ### CI — GitHub Actions (`scrape.yml`)
 
-- **Cron:** `3,18,33,48 * * * *` (every 15 min, UTC). GitHub honors 15-min intervals reliably.
-- **Self-loop:** each cron fires `--iterations 6 --interval 120` — ~2-min effective polling inside the 15-min window (`POLL_INTERVAL_S` / `POLL_ITERATIONS` are workflow vars, tune without editing cron). 6×120s=12 min + ~2 min setup fits the window, so runs never overlap and queued runs are never cancelled.
+- **Cron:** `3,18,33,48 * * * *` (every 15 min, UTC). GitHub schedules are best-effort, so the three-pass loop provides the practical five-minute cadence while the job is running.
+- **Self-loop:** each cron fires `--iterations 3 --interval 300` — passes run at approximately 0, 5, and 10 minutes. Telegram notifications are emitted after each pass; state and Pages are published after the batch. The job normally completes before the next 15-minute tick, so queued runs are not cancelled.
 - **Concurrency:** `group: scraper`, `cancel-in-progress: false` — queued, never skipped.
 - **Data commit:** stages only the scraper-owned files (`data/active-loans.json`, `notify-*.json`, `stats.json`, `runs.json`, `archive/`), restores the git-crypt-decrypted `.env`/SA blob, then `fetch + rebase + push` with a retry loop — **the job fails loudly if the data commit is not pushed**, so a green run always means fresh data reached `main` (no more silent stale dashboard).
 - **Deploy:** after scrape succeeds, build `_site/` (dashboard HTML/JS/CSS + `data/`), upload as Pages artifact, deploy.
@@ -196,7 +197,8 @@ gets first pick of every qualifying loan. Both accounts gate at **>100%**
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `I2I_STORAGE` | `json` | `json` (git-as-DB) or `firebase` (Firestore) |
-| `NOTIFY_MIN_RATE_PCT` | `40` | **Notify gate** — Telegram alert on loans with rate **>** this |
+| `NOTIFY_MIN_RATE_PCT` | `40` | **Detailed notify gate** — Telegram alert on loans with rate **>** this |
+| `NOTIFY_BUCKET_MIN_RATE_PCT` | `30` | **Silent bucket gate** — bucket counts/links for loans with rate **>** this |
 | `NOTIFY_HIGH_RATE_PCT` | `100` | **LOUD alert gate** — fires the moment a loan exceeds this (auto-invest candidate), even if the standard set is unchanged |
 | `I2I_DIGEST_HOURS` | unset | Re-send the qualifying set every N hours even when unchanged (so a stable market never goes silent) |
 | `AUTOINVEST_MIN_RATE_PCT` | `100` | **Auto-invest gate** — place real money only on rate **>** this |
@@ -324,7 +326,7 @@ Issues and PRs welcome. Conventional commits are the changelog. Keep the public/
 
 ## Status
 
-Stable and running in production (15-min scrape cron + optional hourly invest window).
+Stable and running in production (three scraper passes at roughly five-minute spacing inside a 15-minute GitHub Actions run, plus the optional invest window).
 
 ## Disclaimer
 

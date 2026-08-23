@@ -2,14 +2,15 @@
 module imports from here; nothing hardcoded elsewhere (no magic numbers, no
 scattered endpoints/field names).
 
-TWO DISTINCT rate gates — DO NOT CONFLATE (env var == config name, one each):
+THREE DISTINCT notification/investment gates — DO NOT CONFLATE (env var == config name, one each):
 
   name                    | default | meaning                       | operator
   ------------------------|---------|-------------------------------|---------
-  NOTIFY_MIN_RATE_PCT     | 40      | ALERT (monitor pings you)     | rate >  this
+  NOTIFY_MIN_RATE_PCT     | 40      | DETAILED ALERT                | rate >  this
+  NOTIFY_BUCKET_MIN_RATE_PCT| 30     | SILENT BUCKET SUMMARY         | rate >  this
   AUTOINVEST_MIN_RATE_PCT | 100     | PLACE REAL MONEY              | rate >  this
 
-NOTIFY = free/read-only (Telegram/ntfy). AUTOINVEST = spends money; 100 places
+NOTIFY = free/read-only (Telegram/ntfy). BUCKET notifications are silent summaries. AUTOINVEST = spends money; 100 places
 money only on loans with rate STRICTLY > 100% (the user's chosen gate).
 
 HARD SAFETY RAILS (caps) are circuit breakers — real money moves through them.
@@ -30,8 +31,18 @@ def _f(env: str, default: float) -> float:
 
 
 # ── rate gates (two distinct thresholds — do NOT conflate; see table above) ──
-NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # ALERT gate (rate >)
+NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # detailed alert gate (rate >)
+NOTIFY_BUCKET_MIN_RATE_PCT: float = _f("NOTIFY_BUCKET_MIN_RATE_PCT", 30.0) # silent bucket gate (rate >)
 NOTIFY_HIGH_RATE_PCT: float = _f("NOTIFY_HIGH_RATE_PCT", 100.0)       # LOUD alert gate (rate >)
+# Bucket boundaries are lower-inclusive and upper-exclusive, except the final
+# bucket. Keep these stable so a loan moving from 39.9% to 40% is observable.
+NOTIFY_BUCKETS: tuple[tuple[str, float, float | None], ...] = (
+    ("30-40", 30.0, 40.0),
+    ("40-50", 40.0, 50.0),
+    ("50-70", 50.0, 70.0),
+    ("70-100", 70.0, 100.0),
+    ("100+", 100.0, None),
+)
 AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 100.0) # MONEY gate (rate >)
 # Credit gate: skip loans with score BELOW this (score >= 700 qualifies).
 # Loans with NO credit score are IMPUTED as NO_CREDIT_IMPUTED_SCORE (720), so

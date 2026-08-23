@@ -8,6 +8,7 @@ import logging
 import os
 import random
 import time
+from html import escape
 from datetime import datetime, timedelta, timezone
 
 from . import config as C
@@ -31,6 +32,12 @@ def _high_rate_threshold() -> float:
     the standard change-only tier — the investor must know the moment a
     >100% loan is live. config.NOTIFY_HIGH_RATE_PCT, env-overridable."""
     return C._f("NOTIFY_HIGH_RATE_PCT", C.NOTIFY_HIGH_RATE_PCT)
+
+
+def _bucket_min_threshold() -> float:
+    """Silent bucket gate, re-read so runtime env overrides behave like the
+    detailed and loud notification gates."""
+    return C._f("NOTIFY_BUCKET_MIN_RATE_PCT", C.NOTIFY_BUCKET_MIN_RATE_PCT)
 
 
 def _digest_hours() -> float:
@@ -59,6 +66,44 @@ def _digest_due(prev_notified_at: str | None, hours: float) -> bool:
     except ValueError:
         return True
     return datetime.now(timezone.utc) - prev >= timedelta(hours=hours)
+
+
+def _bucket_snapshot(active: list[dict]) -> dict[str, list[str]]:
+    """Return stable >30% notification buckets keyed by loan IDs."""
+    snapshot = {name: [] for name, _low, _high in C.NOTIFY_BUCKETS}
+    for loan in active:
+        rate = loan.get("interestRate")
+        if rate is None or rate <= _bucket_min_threshold():
+            continue
+        for index, (name, low, high) in enumerate(C.NOTIFY_BUCKETS):
+            lower_match = rate > low if index == 0 else rate >= low
+            if lower_match and (high is None or rate < high):
+                snapshot[name].append(str(loan["loanId"]))
+                break
+    return {name: sorted(ids) for name, ids in snapshot.items()}
+
+
+def _bucket_message(active: list[dict], current: dict[str, list[str]],
+                    previous: dict[str, list[str]]) -> str:
+    """Build a compact, silent bucket update with links only for entrants."""
+    by_id = {str(loan["loanId"]): loan for loan in active}
+    lines = ["📊 <b>LOAN RATE BUCKET UPDATE (&gt;30%)</b>"]
+    for name, _low, _high in C.NOTIFY_BUCKETS:
+        ids = current.get(name, [])
+        lines.append(f"• <b>{name}%</b>: {len(ids)} loan(s)")
+        entered = [loan_id for loan_id in ids if loan_id not in set(previous.get(name, []))]
+        for loan_id in entered:
+            loan = by_id.get(loan_id)
+            if not loan:
+                continue
+            rate = loan.get("interestRate")
+            url = loan.get("loanUrl") or ""
+            label = f"Loan {loan_id}"
+            if url:
+                label = f'<a href="{escape(url, quote=True)}">{label}</a>'
+            lines.append(f"  ↳ {label} — {rate:.2f}%")
+    lines.append("\n<i>Silent update: links are only shown for loans newly entering a bucket.</i>")
+    return "\n".join(lines)
 
 
 def run(raw_rows: list[dict] | None = None) -> dict:
@@ -103,6 +148,35 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     qual_ids = {str(ln["loanId"]) for ln in qualifying}
 
     prev_state = storage.load_notify_state()
+
+    # Silent bucket tier — visible coverage for 30-40% loans without sending a
+    # full loan-by-loan alert. State advances only after Telegram delivery, so a
+    # transient outage retries the same change on the next scrape.
+    bucket_snapshot = _bucket_snapshot(active)
+    previous_buckets = {
+        str(name): sorted({str(x) for x in ids})
+        for name, ids in (prev_state.get("buckets", {}) or {}).items()
+    }
+    bucket_changed = bucket_snapshot != previous_buckets
+    bucket_sent = False
+    if bucket_changed:
+        try:
+            bucket_sent = send_telegram_text(
+                _bucket_message(active, bucket_snapshot, previous_buckets),
+                silent=True,
+            )
+            log.info("bucket summary (%d loans >%g%%): %s",
+                     sum(len(ids) for ids in bucket_snapshot.values()),
+                     _bucket_min_threshold(),
+                     "sent" if bucket_sent else "FAILED")
+        except Exception as e:  # noqa: BLE001
+            log.warning("bucket summary failed: %s", e)
+        if bucket_sent:
+            storage.save_notify_state(
+                list(prev_state.get("qualifyingIds", [])),
+                notified_at=prev_state.get("notifiedAt"),
+                buckets=bucket_snapshot,
+            )
 
     # LOUD tier — rate > NOTIFY_HIGH_RATE_PCT (default 100). A brand-new loan in
     # this tier fires an IMMEDIATE loud Telegram alert even when the standard
@@ -151,9 +225,9 @@ def run(raw_rows: list[dict] | None = None) -> dict:
                 url = ln.get("loanUrl") or ""
                 name = f'<a href="{url}">Loan {ln["loanId"]}</a>' if url else f'Loan {ln["loanId"]}'
                 # The rate is guaranteed > high_threshold here, but the INVESTOR
-                # also applies the credit gate (>=720, no-score imputed 720). Label
+                # also applies the credit gate (>=700, no-score imputed 720). Label
                 # the loan with its true investability so the "candidate" alert is
-                # honest — a >100% loan with sub-720 credit WILL be skipped.
+                # honest — a >100% loan with sub-700 credit WILL be skipped.
                 score = imputed_credit(ln)
                 no_credit = has_no_credit(ln)
                 cs = "no-credit→720" if no_credit else f"credit {score:.0f}"
@@ -240,6 +314,9 @@ def run(raw_rows: list[dict] | None = None) -> dict:
         "droppedQualifyingLoans": len(dropped_ids),
         "loudTierLoans": len(high),
         "loudTierSent": high_sent,
+        "bucketChanged": bucket_changed,
+        "bucketSent": bucket_sent,
+        "bucketCounts": {name: len(ids) for name, ids in bucket_snapshot.items()},
         "rateThreshold": threshold,
         "highRateThreshold": high_threshold,
         "errors": [],
@@ -263,7 +340,7 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     storage.append_changelog(summary)
     log.info(
         "run complete: active=%d new=%d archived=%d qualifying=%d newQ=%d droppedQ=%d "
-        "loud=%d loudSent=%s",
+        "loud=%d loudSent=%s buckets=%s bucketSent=%s",
         len(active),
         len(new_loans),
         archived,
@@ -272,5 +349,7 @@ def run(raw_rows: list[dict] | None = None) -> dict:
         len(dropped_ids),
         len(high),
         high_sent,
+        {name: len(ids) for name, ids in bucket_snapshot.items()},
+        bucket_sent,
     )
     return summary

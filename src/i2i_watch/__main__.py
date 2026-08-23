@@ -126,7 +126,9 @@ def main(argv: list[str] | None = None) -> int:
     # default: scrape/monitor loop
     if args.reset_notify_state:
         from . import storage
-        storage.save_notify_state([], notified_at="1970-01-01T00:00:00Z")
+        storage.save_notify_state(
+            [], notified_at="1970-01-01T00:00:00Z", high_ids=[], buckets={}
+        )
         # FULL reset: also clear the ever-notified history so EVERY currently-
         # qualifying loan re-announces once, not just ones not in the last
         # notify-state snapshot. Without this, loans marked sent weeks ago stay

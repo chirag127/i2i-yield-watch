@@ -358,34 +358,45 @@ def filter_unnotified(loans: list[dict], notified_ids) -> list[dict]:
 
 
 def load_notify_state() -> dict:
-    """Last notification snapshot: {qualifyingIds:[...], notifiedAt:iso}.
+    """Last notification snapshot: detailed IDs, loud IDs, bucket IDs, timestamp.
 
     Used to notify on qualifying-set CHANGES (loan appears/drops) + drive the
     periodic digest. JSON backend only keeps a single doc; firebase mirrors it
     under meta/notifyState.
     """
     init()
-    default = {"qualifyingIds": [], "notifiedAt": None}
+    default = {"qualifyingIds": [], "notifiedAt": None, "highIds": [], "buckets": {}}
     if _mode == "json":
         return _load_json("notify-state.json", default)
     doc = _db.collection("meta").document("notifyState").get()
     return doc.to_dict() if doc.exists else default
 
 
-def save_notify_state(qualifying_ids: list[str], notified_at: str | None = None,
-                      high_ids: list[str] | None = None) -> None:
-    """Persist the notify snapshot. high_ids = loud-tier (rate > NOTIFY_HIGH
-    _RATE_PCT) loanIds — kept so a re-posted >100% loan re-alerts but an
-    already-alerted one stays silent."""
+_UNSET = object()
+
+
+def save_notify_state(qualifying_ids: list[str], notified_at: str | None | object = _UNSET,
+                      high_ids: list[str] | None = None,
+                      buckets: dict[str, list[str]] | None = None) -> None:
+    """Persist the notification snapshot without dropping another tier.
+
+    ``high_ids`` tracks the loud rate tier and ``buckets`` tracks the silent
+    >30% bucket summary. Optional fields are merged with the existing document,
+    so a standard-tier update cannot erase either tier's dedup state.
+    """
     init()
+    current = load_notify_state()
     payload = {
         "qualifyingIds": sorted({str(x) for x in qualifying_ids}),
-        "notifiedAt": notified_at or _now_iso(),
+        "notifiedAt": _now_iso() if notified_at is _UNSET else notified_at,
+        "highIds": sorted({str(x) for x in (high_ids if high_ids is not None else current.get("highIds", []))}),
+        "buckets": {
+            str(name): sorted({str(x) for x in ids})
+            for name, ids in (buckets if buckets is not None else current.get("buckets", {})).items()
+        },
     }
-    if high_ids is not None:
-        payload["highIds"] = sorted({str(x) for x in high_ids})
     if _mode == "json":
-        _write_json("notify-state.json", {**payload, "updatedAt": payload["notifiedAt"]})
+        _write_json("notify-state.json", {**payload, "updatedAt": _now_iso()})
         return
     _db.collection("meta").document("notifyState").set({**payload, "updatedAt": _ts()})
 

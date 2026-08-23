@@ -2,11 +2,11 @@ name: i2i Yield Watch — Auto Scraper
 
 on:
   schedule:
-    # GitHub drops cron faster than every 5 min, so we ask for 15-min cron and
-    # each run SELF-LOOPS 9 polls x 120s internally -> ~2-min effective cadence
-    # (POLL_INTERVAL_S / POLL_ITERATIONS below; tune there, not in cron).
-    # ~720 listing requests/day + logins stays under i2i's aggressive-request
-    # thresholds that already 502 direct HTTP at higher volumes.
+    # GitHub's scheduled cron is not a precise five-minute timer, so each
+    # 15-minute run performs three passes at five-minute spacing. Notifications
+    # are sent after every pass; the final pass's state is published below.
+    # The repository_dispatch tick can start a catch-up run when needed, but
+    # concurrency prevents overlapping scrapers.
     - cron: '3,18,33,48 * * * *'
   # Do not trigger on data commits: that creates a self-triggering scrape chain
   # and collides with invest.yml's state commits.
@@ -85,21 +85,20 @@ jobs:
           NTFY_USER: ${{ secrets.NTFY_USER }}
           NTFY_PASSWORD: ${{ secrets.NTFY_PASSWORD }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
-          PRIORITY_HIGH_RATE_PCT: '70'
-          PRIORITY_MEDIUM_RATE_PCT: '50'
-          NOTIFY_MIN_RATE_PCT: '40'
-          NOTIFY_HIGH_RATE_PCT: '100'
-          I2I_DIGEST_HOURS: '6'
-          STARTUP_JITTER_MS: '2000'
-          # ~2-min effective polling inside the 15-min cron window:
-          # 9 polls x 120s spans t=0..t=16 (job timeout 45m leaves headroom).
-          # 6 x 120s = 12 min self-loop + ~2 min setup/publish fits inside the
-          # 15-min cron window, so runs never overlap and queued runs are never
-          # cancelled ("higher priority waiting request" churn). Effective
-          # polling is ~every 2 min while a job is alive.
-          POLL_INTERVAL_S: '120'
-          POLL_ITERATIONS: '6'
-        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || env.POLL_ITERATIONS }} --interval ${{ vars.POLL_INTERVAL_S || env.POLL_INTERVAL_S }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
+          PRIORITY_HIGH_RATE_PCT: ${{ vars.PRIORITY_HIGH_RATE_PCT || '70' }}
+          PRIORITY_MEDIUM_RATE_PCT: ${{ vars.PRIORITY_MEDIUM_RATE_PCT || '50' }}
+          NOTIFY_MIN_RATE_PCT: ${{ vars.NOTIFY_MIN_RATE_PCT || '40' }}
+          NOTIFY_BUCKET_MIN_RATE_PCT: ${{ vars.NOTIFY_BUCKET_MIN_RATE_PCT || '30' }}
+          NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}
+          I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS || '6' }}
+          STARTUP_JITTER_MS: ${{ vars.STARTUP_JITTER_MS || '2000' }}
+          # Three passes at t≈0, 5, and 10 minutes. This is the closest
+          # reliable five-minute cadence inside GitHub's 15-minute schedule:
+          # 3 passes + setup/publish normally finish before the next cron tick.
+          # Telegram is sent by each pass; JSON/Pages publish follows the batch.
+          POLL_INTERVAL_S: '300'
+          POLL_ITERATIONS: '3'
+        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || '3' }} --interval ${{ vars.POLL_INTERVAL_S || '300' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
       - name: Commit and publish updated data (state persistence — dedup across runs)
         run: |

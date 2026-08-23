@@ -16,7 +16,7 @@ from i2i_watch.scorer import (
 def test_no_credit_imputed_as_720():
     with_credit = {"interestRate": 50, "creditScoreNumeric": 800}
     no_credit = {"interestRate": 50, "creditScoreNumeric": None}
-    # no-credit is ranked AS IF the score were 720 (passes the 720 gate, but is
+    # no-credit is ranked AS IF the score were 720 (passes the 700 gate, but is
     # high-risk/uncertain vs a real 750+ score — never treated as a 0)
     assert imputed_credit(no_credit) == 720.0
     assert imputed_credit(with_credit) == 800.0

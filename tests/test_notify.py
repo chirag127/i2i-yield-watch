@@ -12,7 +12,13 @@ LOAN = {
     "creditScore": "742",
     "creditScoreNumeric": 742,
     "riskCategory": "B",
+    "product": "Regular Loans",
     "name": "Ravi Kumar",
+    "location": "Delhi",
+    "employmentType": "Salaried",
+    "monthlyIncome": 50000,
+    "tenure": "12 Months",
+    "purpose": "Business",
     "loanUrl": "https://www.i2ifunding.com/borrower/listing/public-profile/88001/500123",
 }
 
@@ -25,6 +31,17 @@ def test_telegram_block_first_line_bold_and_clickable():
     assert "<b>" in first and "</b></a>" in first
     assert LOAN["loanUrl"] in first
     assert "88.50% p.a." in first
+
+
+def test_telegram_block_contains_all_available_loan_details():
+    html = ch.format_loan_line(LOAN)
+    for value in (
+        "Yield 61.20/100", "i2i-#88001", "Loan 500123", "₹50,000",
+        "₹20,000 left", "Regular Loans", "Credit 742", "Risk B",
+        "Ravi Kumar", "Delhi", "Salaried", "₹50,000/mo", "12 Months",
+        "Business",
+    ):
+        assert value in html
 
 
 def test_telegram_block_has_no_field_labels():
