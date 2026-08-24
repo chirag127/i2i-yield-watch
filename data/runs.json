@@ -1,68 +1,5 @@
 [
   {
-    "runId": "run_1787474864769",
-    "startedAt": "2026-08-23T08:47:44.769956Z",
-    "completedAt": "2026-08-23T08:47:55.369824Z",
-    "loansFound": 25,
-    "newLoans": 0,
-    "loansArchived": 0,
-    "qualifyingLoans": 0,
-    "newQualifyingLoans": 0,
-    "droppedQualifyingLoans": 0,
-    "loudTierLoans": 0,
-    "loudTierSent": false,
-    "rateThreshold": 40.0,
-    "highRateThreshold": 100.0,
-    "errors": [],
-    "notificationsSent": {
-      "telegram": false,
-      "ntfy": false
-    },
-    "updatedAt": "2026-08-23T08:47:55.370872Z"
-  },
-  {
-    "runId": "run_1787474995374",
-    "startedAt": "2026-08-23T08:49:55.374386Z",
-    "completedAt": "2026-08-23T08:50:06.142508Z",
-    "loansFound": 25,
-    "newLoans": 0,
-    "loansArchived": 0,
-    "qualifyingLoans": 0,
-    "newQualifyingLoans": 0,
-    "droppedQualifyingLoans": 0,
-    "loudTierLoans": 0,
-    "loudTierSent": false,
-    "rateThreshold": 40.0,
-    "highRateThreshold": 100.0,
-    "errors": [],
-    "notificationsSent": {
-      "telegram": false,
-      "ntfy": false
-    },
-    "updatedAt": "2026-08-23T08:50:06.143382Z"
-  },
-  {
-    "runId": "run_1787475797906",
-    "startedAt": "2026-08-23T09:03:17.906489Z",
-    "completedAt": "2026-08-23T09:03:28.551199Z",
-    "loansFound": 25,
-    "newLoans": 0,
-    "loansArchived": 0,
-    "qualifyingLoans": 0,
-    "newQualifyingLoans": 0,
-    "droppedQualifyingLoans": 0,
-    "loudTierLoans": 0,
-    "loudTierSent": false,
-    "rateThreshold": 40.0,
-    "highRateThreshold": 100.0,
-    "errors": [],
-    "notificationsSent": {
-      "telegram": false,
-      "ntfy": false
-    },
-    "updatedAt": "2026-08-23T09:03:28.552314Z"
-  },
-  {
     "runId": "run_1787475928555",
     "startedAt": "2026-08-23T09:05:28.555993Z",
     "completedAt": "2026-08-23T09:05:39.683786Z",
@@ -4792,5 +4729,95 @@
       "ntfy": false
     },
     "updatedAt": "2026-08-24T04:32:39.088243Z"
+  },
+  {
+    "runId": "run_1787548257056",
+    "startedAt": "2026-08-24T05:10:57.056177Z",
+    "completedAt": "2026-08-24T05:11:07.827500Z",
+    "loansFound": 21,
+    "newLoans": 0,
+    "loansArchived": 3,
+    "qualifyingLoans": 0,
+    "newQualifyingLoans": 0,
+    "droppedQualifyingLoans": 0,
+    "loudTierLoans": 0,
+    "loudTierSent": false,
+    "bucketChanged": true,
+    "bucketSent": true,
+    "bucketCounts": {
+      "30-40": 18,
+      "40-50": 0,
+      "50-70": 0,
+      "70-100": 0,
+      "100+": 0
+    },
+    "rateThreshold": 40.0,
+    "highRateThreshold": 100.0,
+    "errors": [],
+    "notificationsSent": {
+      "telegram": false,
+      "ntfy": false
+    },
+    "updatedAt": "2026-08-24T05:11:07.830627Z"
+  },
+  {
+    "runId": "run_1787548567834",
+    "startedAt": "2026-08-24T05:16:07.834902Z",
+    "completedAt": "2026-08-24T05:16:18.244651Z",
+    "loansFound": 21,
+    "newLoans": 0,
+    "loansArchived": 0,
+    "qualifyingLoans": 0,
+    "newQualifyingLoans": 0,
+    "droppedQualifyingLoans": 0,
+    "loudTierLoans": 0,
+    "loudTierSent": false,
+    "bucketChanged": false,
+    "bucketSent": false,
+    "bucketCounts": {
+      "30-40": 18,
+      "40-50": 0,
+      "50-70": 0,
+      "70-100": 0,
+      "100+": 0
+    },
+    "rateThreshold": 40.0,
+    "highRateThreshold": 100.0,
+    "errors": [],
+    "notificationsSent": {
+      "telegram": false,
+      "ntfy": false
+    },
+    "updatedAt": "2026-08-24T05:16:18.245609Z"
+  },
+  {
+    "runId": "run_1787548878249",
+    "startedAt": "2026-08-24T05:21:18.249651Z",
+    "completedAt": "2026-08-24T05:21:28.760025Z",
+    "loansFound": 20,
+    "newLoans": 0,
+    "loansArchived": 1,
+    "qualifyingLoans": 0,
+    "newQualifyingLoans": 0,
+    "droppedQualifyingLoans": 0,
+    "loudTierLoans": 0,
+    "loudTierSent": false,
+    "bucketChanged": true,
+    "bucketSent": true,
+    "bucketCounts": {
+      "30-40": 17,
+      "40-50": 0,
+      "50-70": 0,
+      "70-100": 0,
+      "100+": 0
+    },
+    "rateThreshold": 40.0,
+    "highRateThreshold": 100.0,
+    "errors": [],
+    "notificationsSent": {
+      "telegram": false,
+      "ntfy": false
+    },
+    "updatedAt": "2026-08-24T05:21:28.761968Z"
   }
 ]
