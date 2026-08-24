@@ -66,20 +66,20 @@ def test_select_filters_and_ranks():
     assert [s["loanId"] for s in select(rows, 40.0, min_score=0)] == [4, 2, 1]
 
 
-def test_select_credit_gate_filters_below_700():
-    # real scores below the 700 gate are never invested; 700 and above pass
+def test_select_credit_gate_filters_below_500():
+    # real scores below the 500 gate are never invested; 500 and above pass
     rows = [
-        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 699, "pl_amt_left": "5000"},
-        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 700, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": 499, "pl_amt_left": "5000"},
+        {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": 500, "pl_amt_left": "5000"},
         {"pl_bloan_id": 3, "pl_applicable_rate": "120.0", "bloan_cibil_score": 750, "pl_amt_left": "5000"},
         {"pl_bloan_id": 4, "pl_applicable_rate": "120.0", "bloan_cibil_score": 800, "pl_amt_left": "5000"},
     ]
-    assert [s["loanId"] for s in select(rows, 100.0)] == [4, 3, 2]  # 699 dropped
+    assert [s["loanId"] for s in select(rows, 100.0)] == [4, 3, 2]  # 499 dropped
 
 
 def test_select_credit_gate_no_credit_imputed_720_passes():
     # a loan with NO credit score is imputed NO_CREDIT_IMPUTED_SCORE (720), which
-    # MEETS the 700 gate -> kept, but ranks below any real 750+ score
+    # MEETS the 500 gate -> kept, but ranks below any real 750+ score
     rows = [
         {"pl_bloan_id": 1, "pl_applicable_rate": "120.0", "bloan_cibil_score": None, "pl_amt_left": "5000"},
         {"pl_bloan_id": 2, "pl_applicable_rate": "120.0", "bloan_cibil_score": "", "pl_amt_left": "5000"},
@@ -107,9 +107,9 @@ def test_select_strictly_above_gate():
 
 
 def test_autoinvest_gate_defaults():
-    # lock the real-money thresholds: strictly >100% rate and >=700 credit
+    # lock the real-money thresholds: strictly >100% rate and >=500 credit
     assert C.AUTOINVEST_MIN_RATE_PCT == 100.0
-    assert C.AUTOINVEST_MIN_CREDIT_SCORE == 700.0
+    assert C.AUTOINVEST_MIN_CREDIT_SCORE == 500.0
 
 
 def test_select_gate_100_keeps_only_above_100():

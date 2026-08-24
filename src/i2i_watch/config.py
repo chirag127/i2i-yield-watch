@@ -49,12 +49,12 @@ NOTIFY_BUCKETS: tuple[tuple[str, float, float | None], ...] = (
     ("100+", 100.0, None),
 )
 AUTOINVEST_MIN_RATE_PCT: float = _f("AUTOINVEST_MIN_RATE_PCT", 100.0) # MONEY gate (rate >)
-# Credit gate: skip loans with score BELOW this (score >= 700 qualifies).
+# Credit gate: skip loans with score BELOW this (score >= 500 qualifies).
 # Loans with NO credit score are IMPUTED as NO_CREDIT_IMPUTED_SCORE (720), so
-# they PASS the 700 gate (a missing bureau file is not a 0) but rank as
+# they PASS the 500 gate (a missing bureau file is not a 0) but rank as
 # high-risk/uncertain below any real 750+ score — never treated as a 0 score.
 # SINGLE SOURCE OF TRUTH: change this value to change the credit gate for every account and workflow.
-AUTOINVEST_MIN_CREDIT_SCORE: float = 700.0
+AUTOINVEST_MIN_CREDIT_SCORE: float = 500.0
 TOPUP_MIN_RATE_PCT: float = _f("TOPUP_MIN_RATE_PCT", 150.0)          # ADD-FUNDS trigger (rate >)
 # Idle-capital watchdog: after this many days with NO qualifying loan, the
 # auto-investor pings Telegram so idle escrow never goes silently unmonitored.

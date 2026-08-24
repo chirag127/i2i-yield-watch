@@ -165,7 +165,7 @@ def test_loud_tier_alerts_new_high_loan_even_when_standard_unchanged(
 
 def test_loud_tier_labels_credit_skip_honestly(json_backend, capture_notify, monkeypatch):
     """The loud-tier 'AUTO-INVEST CANDIDATE' alert must label a >100% loan with
-    sub-700 credit as SKIP (the investor applies the credit gate, so announcing
+    sub-500 credit as SKIP (the investor applies the credit gate, so announcing
     it as a pure candidate would be a lie)."""
     sent_loud = []
 
@@ -176,9 +176,9 @@ def test_loud_tier_labels_credit_skip_honestly(json_backend, capture_notify, mon
 
     monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
 
-    # >100% loan with low credit (699): flagged as SKIP, not "will invest"
+    # >100% loan with low credit (499): flagged as SKIP, not "will invest"
     low = _loan("21", 130)
-    low["usr_cibil_score"] = "699"
+    low["usr_cibil_score"] = "499"
     pipeline.run(raw_rows=[low])
     assert len(sent_loud) == 1
     assert "will invest" not in sent_loud[0]

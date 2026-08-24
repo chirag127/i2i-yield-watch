@@ -29,7 +29,7 @@ def test_investment_overrides_match_policy():
     assert workflow.count("|| '100'") >= 3
     assert "I2I_NEERU_AUTOINVEST_MIN_RATE_PCT" in workflow
     assert "AUTOINVEST_MIN_CREDIT_SCORE" not in workflow
-    assert C.AUTOINVEST_MIN_CREDIT_SCORE == 700.0
+    assert C.AUTOINVEST_MIN_CREDIT_SCORE == 500.0
 
 
 def test_digest_cannot_lower_the_real_money_gate():
