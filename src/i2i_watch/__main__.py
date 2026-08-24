@@ -141,16 +141,41 @@ def main(argv: list[str] | None = None) -> int:
     # round-trip per poll. One login per run; direct HTTP is the only scrape
     # path (Playwright is never used for actual scraping).
     client = None
-    if args.iterations > 0:
+    if args.iterations != 0:  # 0 = continuous mode (still needs a client)
         try:
             from .client import I2iClient
             client = I2iClient.from_env()
-            log.info("i2i session ready (one login reused across %d iterations)",
-                     args.iterations)
+            log.info("i2i session ready (one login reused across iterations)")
         except SystemExit as e:
             log.warning("no i2i creds; each iteration will fail loudly: %s", e)
         except Exception as e:  # noqa: BLE001
             log.warning("could not pre-auth client: %s", e)
+
+    # Continuous mode: --iterations 0 (or negative) = poll forever until killed.
+    # The workflow runs this in the background and terminates it at handoff.
+    # A run of consecutive failures means the scraper is broken (dead creds,
+    # API change, network block) — exit 1 so the workflow's failure alert
+    # fires and the tick pinger restarts rather than idling silently forever.
+    if args.iterations <= 0:
+        consec_failures = 0
+        max_failures = 6
+        i = 0
+        while True:
+            i += 1
+            log.info("=== iteration %d (continuous) ===", i)
+            try:
+                summary = run(client=client)
+                log.info("iteration %d done: %s", i, summary["notificationsSent"])
+                consec_failures = 0
+            except Exception as e:  # noqa: BLE001
+                consec_failures += 1
+                log.error("iteration %d failed (%d consecutive): %s",
+                          i, consec_failures, e)
+                if consec_failures >= max_failures:
+                    log.error("%d consecutive failures — scraper broken, exiting",
+                              max_failures)
+                    return 1
+            time.sleep(args.interval)
 
     rc = 0
     for i in range(1, args.iterations + 1):

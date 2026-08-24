@@ -1,15 +1,29 @@
 name: i2i Yield Watch — Auto Scraper
 
+# CONTINUOUS ALIVE (replaces the old 5-min cron + 8-pass burst):
+#   - No schedule here at all. tick.yml (the "tick pinger") runs on a 5-min
+#     cron (GitHub's floor) and dispatches this workflow ONLY when no scraper
+#     run is alive — so a dead scraper is restarted within ~5 min of dying.
+#   - Each scraper job runs in CONTINUOUS mode (--iterations 0) for its full
+#     340-min timeout. Each pass scrapes via direct HTTP (~15s) and sleeps 30s,
+#     so new loans are detected and notified within ~30s — independent of
+#     GitHub cron delays.
+#   - ~10 min before the job timeout, the job commits final state, dispatches
+#     a successor scraper run, and exits; concurrency cancel-in-progress:
+#     false queues the successor, so the handoff gap is seconds, not minutes.
+#   - A companion loop commits data/*.json every 60s (git-as-DB) so a job
+#     killed by timeout/crash never loses its last-scraped state.
+#
+# The scraper owns ONLY data/active-loans.json, data/notifications-sent.json,
+# data/notify-state.json, data/stats.json, data/runs.json, data/archive.
+# Investment state (invested-loans.json) belongs to invest.yml.
+
 on:
+  # The deploy job runs on this 5-min cron. The scrape job ignores
+  # scheduled triggers (it only starts from workflow_dispatch or tick) —
+  # see the `if:` on the scrape job below.
   schedule:
-    # Every 5 minutes a fresh run polls 8 times at 30s intervals (~4 min of
-    # polling), so notification latency is ~30s and each run finishes WELL
-    # under the timeout. This replaces the old 90x30s=45min loop, which
-    # collided with timeout-minutes: 45 — runs were cancelled mid-loop and
-    # backfilled the queue, delaying the next notification by ~40 min.
     - cron: '*/5 * * * *'
-  # Do not trigger on data commits: that creates a self-triggering scrape chain
-  # and collides with invest.yml's state commits.
   workflow_dispatch:
     inputs:
       reset_notify_state:
@@ -23,7 +37,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
-  actions: read        # failure-alert step reads run/job metadata via gh
+  actions: write      # self-handoff dispatch via GITHUB_TOKEN
 
 concurrency:
   group: scraper
@@ -31,8 +45,11 @@ concurrency:
 
 jobs:
   scrape:
+    # Only run the continuous scraper on manual dispatch or tick pinger —
+    # never on schedule (the deploy job uses the cron trigger).
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 340
 
     steps:
       - name: Checkout repository
@@ -69,7 +86,7 @@ jobs:
           echo "$GIT_CRYPT_KEY" | base64 -d > git-crypt-key
           git-crypt unlock git-crypt-key
 
-      - name: Run scraper (self-looping)
+      - name: Run scraper (continuous, self-handoff)
         env:
           I2I_STORAGE: json
           I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
@@ -92,84 +109,113 @@ jobs:
           NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}
           I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS || '6' }}
           STARTUP_JITTER_MS: ${{ vars.STARTUP_JITTER_MS || '2000' }}
-          # 8 passes at ~30-second intervals with ONE reused login (session
-          # reuse landed in the code — no per-pass login round-trip). New
-          # loans appear in Telegram within ~30s and the invest workflow is
-          # dispatched immediately. Runs every 5 min via cron, so coverage is
-          # effectively continuous without a run that outlives its timeout.
-          POLL_INTERVAL_S: '30'
-          POLL_ITERATIONS: '8'
-        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || '8' }} --interval ${{ vars.POLL_INTERVAL_S || '30' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
-
-      - name: Commit and publish updated data (state persistence — dedup across runs)
+          POLL_INTERVAL_S: ${{ vars.POLL_INTERVAL_S || '30' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SCRAPE_HANDOFF_MIN: '330'
+          SCRAPE_STATE_PUSH_S: '60'
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Scraper owns only its state files. Investment state belongs to
-          # invest.yml and must never be staged here.
+          # Continuous mode: --iterations 0 = poll forever. Each pass scrapes
+          # via direct HTTP (~15s) and sleeps 30s. New loans are detected and
+          # notified within ~30s — independent of GitHub cron delays.
+          .venv-ci/bin/python -m i2i_watch --iterations 0 --interval ${{ vars.POLL_INTERVAL_S || '30' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }} &
+          SCRAPE_PID=$!
+          START=$(date +%s)
+          HANDOFF_AT=$(( ${SCRAPE_HANDOFF_MIN} * 60 ))
+          LAST_PUSH=0
+
+          while kill -0 "$SCRAPE_PID" 2>/dev/null; do
+            NOW=$(date +%s)
+            ELAPSED=$(( NOW - START ))
+
+            # Crash-safe state: push data/*.json every 60s (git-as-DB) so a
+            # job killed by timeout/runner-death still has its latest scrape.
+            if [ $(( ELAPSED - LAST_PUSH )) -ge ${SCRAPE_STATE_PUSH_S} ]; then
+              LAST_PUSH=$ELAPSED
+              git add data/active-loans.json data/notifications-sent.json \
+                      data/notify-state.json data/stats.json data/runs.json \
+                      data/archive 2>/dev/null || true
+              if ! git diff --cached --quiet; then
+                # Restore git-crypt-affected files so they don't block push.
+                for f in .env i2i-yield-watch-sa.json; do
+                  if [ -f "$f" ] && ! git diff --quiet -- "$f"; then
+                    git checkout -- "$f"
+                  fi
+                done
+                if git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')" \
+                    && git fetch origin main -q \
+                    && git rebase -X theirs origin/main -q \
+                    && git push origin HEAD:main -q; then
+                  echo "state pushed (t=${ELAPSED}s)"
+                else
+                  echo "::warning::state push failed at t=${ELAPSED}s (will retry)"
+                  if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+                    git rebase --abort
+                  fi
+                fi
+              fi
+            fi
+
+            # Handoff: shortly before the job timeout, dispatch the successor
+            # (queued behind this job) and exit — gap = seconds.
+            if [ $ELAPSED -ge $HANDOFF_AT ]; then
+              echo "handing off — dispatching successor scraper run (t=${ELAPSED}s)"
+              # Final state push before handoff.
+              git add data/active-loans.json data/notifications-sent.json \
+                      data/notify-state.json data/stats.json data/runs.json \
+                      data/archive 2>/dev/null || true
+              if ! git diff --cached --quiet; then
+                for f in .env i2i-yield-watch-sa.json; do
+                  if [ -f "$f" ] && ! git diff --quiet -- "$f"; then
+                    git checkout -- "$f"
+                  fi
+                done
+                git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')" || true
+                git fetch origin main -q && git rebase -X theirs origin/main -q && git push origin HEAD:main -q || true
+              fi
+              rm -f git-crypt-key
+              gh workflow run scrape.yml --repo "${GITHUB_REPOSITORY}" || \
+                echo "::warning::handoff dispatch failed; tick pinger will restart"
+              kill "$SCRAPE_PID" 2>/dev/null || true
+              wait "$SCRAPE_PID" 2>/dev/null || true
+              echo "handoff complete"
+              exit 0
+            fi
+
+            sleep 5
+          done
+          wait "$SCRAPE_PID" 2>/dev/null || true
+          SCRAPE_RC=$?
+          echo "scraper exited on its own (t=$(( $(date +%s) - START ))s, rc=${SCRAPE_RC})"
+          # Final flush: push any uncommitted state.
           git add data/active-loans.json data/notifications-sent.json \
                   data/notify-state.json data/stats.json data/runs.json \
                   data/archive 2>/dev/null || true
-          echo "=== staged files ==="
-          git diff --cached --stat
-
-          if git diff --cached --quiet; then
-            echo "no data change"
-          else
-            git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')"
-
-            # git-crypt leaves the decrypted .env marked modified after the
-            # scraper uses it (its clean/smudge filters keep index and worktree
-            # out of sync on a fresh checkout). Restore the tracked blob from
-            # HEAD so the working tree matches the commit, then verify clean.
-            # Any other dirty file is unexpected and must fail visibly.
-            dirty_files=$(git diff --name-only)
-            unexpected_dirty=$(printf '%s\n' "$dirty_files" | sed '/^$/d;/^\.env$/d;/^i2i-yield-watch-sa\.json$/d')
-            if [ -n "$unexpected_dirty" ]; then
-              echo "::error::Unexpected dirty file after data commit: $unexpected_dirty"
-              exit 1
-            fi
+          if ! git diff --cached --quiet; then
             for f in .env i2i-yield-watch-sa.json; do
               if [ -f "$f" ] && ! git diff --quiet -- "$f"; then
                 git checkout -- "$f"
               fi
             done
-            rm -f git-crypt-key
-            if [ -n "$(git status --porcelain)" ]; then
-              echo "::error::Checkout is still dirty before data push"
-              git status --short
-              exit 1
-            fi
-
-            # Do not use pull --autostash: it previously conflicted while
-            # applying the decrypted .env and still returned success. A green
-            # run now means the fresh data reached origin/main.
-            # -X theirs: a concurrent scrape can land a newer data commit
-            # between this run's checkout and its push (runs are pinned to
-            # their creation SHA, so the rebase then conflicts on the
-            # scrape-owned files). The data this run just scraped is newer,
-            # so it wins; the conflict is deterministic and retrying without
-            # -X theirs would fail forever.
-            echo "base commit: $(git rev-parse --short HEAD)  origin/main: $(git rev-parse --short origin/main)"
-            pushed=false
+            git commit -m "data: i2i scrape $(date -u +'%F %H:%MZ')"
             for i in 1 2 3; do
-              if git fetch origin main \
-                  && git rebase -X theirs origin/main \
-                  && git push origin HEAD:main; then
-                pushed=true
-                echo "data pushed: $(git rev-parse --short HEAD)"
+              if git fetch origin main && git rebase -X theirs origin/main && git push origin HEAD:main; then
                 break
               fi
-              echo "push attempt $i failed, retrying..."
               git rebase --abort 2>/dev/null || true
               sleep 5
             done
-            if [ "$pushed" != true ]; then
-              echo "::error::Scrape data commit was not pushed after 3 attempts"
-              exit 1
-            fi
+          fi
+          rm -f git-crypt-key
+          # If the scraper exited with an error (broken creds, API change),
+          # fail the job so the alert fires.
+          if [ "${SCRAPE_RC}" -ne 0 ]; then
+            echo "::error::Scraper exited with rc=${SCRAPE_RC}"
+            exit 1
           fi
 
       - name: Alert on failure (a broken scraper = silent missed notifications)
@@ -182,16 +228,11 @@ jobs:
           set +e
           [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          # Self-identifying alert: an alert for an OLD failed run must never
-          # look like a live failure. Include run start time + failing step.
           STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/tmp/gh_api_err || echo "unknown")
           [ "$STARTED" = "unknown" ] && echo "gh api run metadata failed: $(cat /tmp/gh_api_err)"
           FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
             --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/tmp/gh_run_err || echo "unknown")
           [ "$FAIL_STEP" = "unknown" ] && echo "gh run view failed: $(cat /tmp/gh_run_err)"
-          # Consecutive failures: completed runs since the last green one, so a
-          # bad streak doesn't spam identical alerts. Counts failure entries
-          # before the first success in the last 10 runs.
           CONSEC=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${GITHUB_WORKFLOW}" --limit 10 --json conclusion \
             --jq '[.[].conclusion] | (index("success") // length) as $n | .[0:$n] | length' 2>/dev/null || echo 0)
           MSG="⚠️ <b>i2i SCRAPER run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0AConsecutive failures: ${CONSEC}%0ANotifications may be paused until the next good run.%0A${RUN_URL}"
@@ -200,10 +241,14 @@ jobs:
             -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
             && echo "failure alert sent" || echo "failure alert send failed"
 
+  # Pages deploy is now a separate independent job on its own 5-min cron.
+  # The scraper runs for ~340 min continuously, so `needs: scrape` would
+  # delay the deploy by hours. Instead, this job deploys whatever data is
+  # on main every 5 min — the scraper pushes data every 60s, so the
+  # dashboard stays fresh without coupling to the scraper lifecycle.
   deploy:
-    needs: scrape
     runs-on: ubuntu-latest
-    if: always() && needs.scrape.result == 'success'
+    if: always()
 
     environment:
       name: github-pages

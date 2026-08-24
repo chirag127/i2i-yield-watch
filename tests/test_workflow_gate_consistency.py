@@ -14,14 +14,21 @@ def _text(name: str) -> str:
 
 def test_scraper_notification_overrides_match_policy():
     workflow = _text("scrape.yml")
-    assert "POLL_INTERVAL_S: '30'" in workflow
-    assert "POLL_ITERATIONS: '8'" in workflow
-    assert "--iterations ${{ vars.POLL_ITERATIONS || '8' }} --interval ${{ vars.POLL_INTERVAL_S || '30' }}" in workflow
-    # The 8x30s burst must fit comfortably under the job timeout so a run is
-    # never cancelled mid-loop (the old 90x30s=45min loop collided with
-    # timeout-minutes and backfilled the queue, delaying notifications).
-    assert "timeout-minutes: 10" in workflow
-    assert "cron: '*/5 * * * *'" in workflow
+    # Continuous runner: --iterations 0 = poll forever, self-handoff before
+    # the 340-min timeout. No more 8x30s burst.
+    assert "--iterations 0" in workflow
+    assert "--interval ${{ vars.POLL_INTERVAL_S || '30' }}" in workflow
+    assert "timeout-minutes: 340" in workflow
+    assert "SCRAPE_HANDOFF_MIN" in workflow
+    assert "SCRAPE_STATE_PUSH_S" in workflow
+    assert "gh workflow run scrape.yml" in workflow  # self-handoff
+    # Deploy is now a separate independent job, not coupled to the scrape
+    # job's lifecycle (the old `needs: scrape` delayed deploy by 340 min).
+    # Check the deploy job header, not the comment that explains it.
+    deploy_section = workflow.split("  deploy:")[1] if "  deploy:" in workflow else ""
+    assert "needs:" not in deploy_section.split("steps:")[0]
+    # Scraper only runs on dispatch/tick, not on schedule (deploy uses cron).
+    assert "github.event_name != 'schedule'" in workflow
     assert "NOTIFY_MIN_RATE_PCT: ${{ vars.NOTIFY_MIN_RATE_PCT || '40' }}" in workflow
     assert "NOTIFY_BUCKET_MIN_RATE_PCT: ${{ vars.NOTIFY_BUCKET_MIN_RATE_PCT || '0' }}" in workflow
     assert "NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}" in workflow
@@ -70,6 +77,22 @@ def test_telegram_bot_is_continuously_alive_with_tick_pinger():
     assert 'select(.status != "completed")' in tick     # only if not alive
     assert "actions: write" in tick
     assert "schedule:" in tick
+
+
+def test_scraper_is_continuously_alive_with_tick_pinger():
+    """The scraper must not rely on cron windows: it runs continuously inside
+    one long-lived job, self-hands-off before its timeout, and the tick
+    pinger restarts it if it dies."""
+    scrape_wf = _text("scrape.yml")
+    assert "timeout-minutes: 340" in scrape_wf          # long-lived job
+    assert "--iterations 0" in scrape_wf                 # continuous mode
+    assert "gh workflow run scrape.yml" in scrape_wf     # self-handoff
+    assert "SCRAPE_HANDOFF_MIN" in scrape_wf
+    assert "SCRAPE_STATE_PUSH_S" in scrape_wf           # periodic state pushes
+
+    tick = _text("tick.yml")
+    assert "gh workflow run scrape.yml" in tick          # pinger dispatches scraper
+    assert 'select(.status != "completed")' in tick      # only if not alive
 
 
 def test_every_workflow_alert_is_self_identifying():
