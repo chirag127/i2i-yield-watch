@@ -2,11 +2,12 @@ name: i2i Yield Watch — Auto Scraper
 
 on:
   schedule:
-    # GitHub's scheduled cron is not a precise five-minute timer, so each
-    # 15-minute run performs three passes at five-minute spacing. Notifications
-    # are sent after every pass; the final pass's state is published below.
-    # The repository_dispatch tick can start a catch-up run when needed, but
-    # concurrency prevents overlapping scrapers.
+    # Each 15-minute cron window performs 25 passes at ~60-second intervals,
+    # giving near-real-time notification (new loans appear within ~60s of the
+    # scrape cycle starting). Notifications are sent after every pass; the
+    # final pass's state is published below. The repository_dispatch tick can
+    # start a catch-up run when needed, but concurrency prevents overlapping
+    # scrapers.
     - cron: '3,18,33,48 * * * *'
   # Do not trigger on data commits: that creates a self-triggering scrape chain
   # and collides with invest.yml's state commits.
@@ -92,13 +93,13 @@ jobs:
           NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}
           I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS || '6' }}
           STARTUP_JITTER_MS: ${{ vars.STARTUP_JITTER_MS || '2000' }}
-          # Three passes at t≈0, 5, and 10 minutes. This is the closest
-          # reliable five-minute cadence inside GitHub's 15-minute schedule:
-          # 3 passes + setup/publish normally finish before the next cron tick.
-          # Telegram is sent by each pass; JSON/Pages publish follows the batch.
-          POLL_INTERVAL_S: '300'
-          POLL_ITERATIONS: '3'
-        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || '3' }} --interval ${{ vars.POLL_INTERVAL_S || '300' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
+          # 25 passes at ~60-second intervals. This gives near-real-time
+          # notification: new loans appear in Telegram within ~60 seconds of
+          # the scrape cycle starting. Each pass is HTTP-only (~10-15s), so
+          # 25 iterations fit in the 45-minute job timeout.
+          POLL_INTERVAL_S: '60'
+          POLL_ITERATIONS: '25'
+        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || '25' }} --interval ${{ vars.POLL_INTERVAL_S || '60' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
       - name: Commit and publish updated data (state persistence — dedup across runs)
         run: |
