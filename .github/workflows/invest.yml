@@ -68,7 +68,7 @@ jobs:
       group: auto-invest-chirag
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
       # NO browser install: invest lists loans via direct HTTP (auto-login +
@@ -174,7 +174,7 @@ jobs:
       group: auto-invest-neeru
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
       # Cached venv (base install, no browser): invest-chirag populated the
