@@ -153,52 +153,63 @@ def _scrape_once() -> list[dict]:
                 pass
 
 
-def fetch_all_loans() -> list[dict]:
+def fetch_all_loans(client: "I2iClient | None" = None) -> list[dict]:
     """Return raw loan rows.
 
     PRIMARY: pure direct-HTTP paginated feed (client.list_loans) — no browser.
-    FALLBACK (belt-and-suspenders): the Playwright XHR-interception scraper below,
-    retried up to 3x. The direct path needs i2i creds (auto-login); with none, or
-    on ANY direct failure (timeout/connection/HTTP), we drop straight to the
-    browser scraper — which needs no auth for the public listing.
+    Playwright is used ONLY for reverse-engineering the API, never for the
+    scrape hot path. The browser XHR-interception scraper below is a manual
+    opt-in (I2I_ALLOW_BROWSER_FALLBACK=1) for debugging an API regression — it
+    is never reached in CI (scrape.yml installs no browser extra) and never in
+    a normal run.
 
-    The browser fallback is OPTIONAL: if Playwright isn't installed (invest.yml
-    runs direct-HTTP-only and deliberately skips the ~150MB browser + apt deps),
-    a direct failure raises instead of silently returning nothing — the real-money
-    path must never mistake a scrape outage for an empty market."""
+    ``client`` may be passed in to REUSE a session across iterations (one
+    login per run instead of one per pass — the historical per-pass login was
+    a wasted round-trip on every 30s poll). When None, a fresh client is built
+    via auto-login.
+    """
+    import os
+
     direct_err: Exception | None = None
     try:
-        from ..client import I2iClient
-
-        client = I2iClient.from_env()
+        if client is None:
+            from ..client import I2iClient
+            client = I2iClient.from_env()
         rows = client.list_loans()
         if rows:
             log.info("listing via direct HTTP: %d loans (no browser)", len(rows))
             return rows
-        log.warning("direct-HTTP listing returned 0 rows; browser fallback")
-    except SystemExit as e:  # no creds -> public browser scrape
-        log.info("no i2i creds for direct listing (%s); browser fallback", e)
-    except Exception as e:  # noqa: BLE001 — timeout/conn/HTTP -> browser fallback
+        log.warning("direct-HTTP listing returned 0 rows")
+        raise RuntimeError("direct-HTTP listing returned 0 rows")
+    except SystemExit as e:  # no creds
+        raise RuntimeError(f"no i2i creds for direct listing: {e}") from e
+    except Exception as e:  # noqa: BLE001 — timeout/conn/HTTP
         direct_err = e
-        log.warning("direct-HTTP listing failed (%s); browser fallback", str(e)[:120])
+        log.warning("direct-HTTP listing failed (%s)", str(e)[:120])
+
+    # Browser fallback is STRICTLY opt-in for API debugging. Without the
+    # explicit flag, a direct failure raises so the run fails loudly and the
+    # workflow's failure alert fires — a scrape outage must never look like
+    # an empty market, and a slow browser must never be in the hot path.
+    if os.environ.get("I2I_ALLOW_BROWSER_FALLBACK", "").strip() != "1":
+        raise RuntimeError(
+            "direct-HTTP listing failed and I2I_ALLOW_BROWSER_FALLBACK is not set "
+            f"(browser fallback disabled): {direct_err}"
+        ) from direct_err
 
     try:  # noqa: SIM105
         import playwright.sync_api  # noqa: F401 — presence check only
     except ImportError:
-        if direct_err is not None:
-            raise RuntimeError(
-                "direct-HTTP listing failed and Playwright is not installed "
-                f"(no browser fallback): {direct_err}"
-            ) from direct_err
         raise RuntimeError(
-            "no i2i creds for direct listing and Playwright is not installed "
-            "(no browser fallback)"
-        )
+            "direct-HTTP listing failed and Playwright is not installed "
+            f"(no browser fallback): {direct_err}"
+        ) from direct_err
 
     last_err: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            log.info("browser scrape attempt %d/%d", attempt, MAX_RETRIES)
+            log.info("browser scrape attempt %d/%d (DEBUG fallback enabled)",
+                     attempt, MAX_RETRIES)
             rows = _scrape_once()
             if rows:
                 return rows

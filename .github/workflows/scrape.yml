@@ -2,13 +2,12 @@ name: i2i Yield Watch — Auto Scraper
 
 on:
   schedule:
-    # Each 15-minute cron window performs 25 passes at ~60-second intervals,
-    # giving near-real-time notification (new loans appear within ~60s of the
-    # scrape cycle starting). Notifications are sent after every pass; the
-    # final pass's state is published below. The repository_dispatch tick can
-    # start a catch-up run when needed, but concurrency prevents overlapping
-    # scrapers.
-    - cron: '3,18,33,48 * * * *'
+    # Every 5 minutes a fresh run polls 8 times at 30s intervals (~4 min of
+    # polling), so notification latency is ~30s and each run finishes WELL
+    # under the timeout. This replaces the old 90x30s=45min loop, which
+    # collided with timeout-minutes: 45 — runs were cancelled mid-loop and
+    # backfilled the queue, delaying the next notification by ~40 min.
+    - cron: '*/5 * * * *'
   # Do not trigger on data commits: that creates a self-triggering scrape chain
   # and collides with invest.yml's state commits.
   workflow_dispatch:
@@ -33,7 +32,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -93,13 +92,14 @@ jobs:
           NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}
           I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS || '6' }}
           STARTUP_JITTER_MS: ${{ vars.STARTUP_JITTER_MS || '2000' }}
-          # 90 passes at ~30-second intervals. New loans appear in Telegram
-          # within ~30 seconds and the invest workflow is dispatched immediately.
-          # Each pass is HTTP-only (~10-15s), so 90 iterations fit in the
-          # 45-minute job timeout (~45min total).
+          # 8 passes at ~30-second intervals with ONE reused login (session
+          # reuse landed in the code — no per-pass login round-trip). New
+          # loans appear in Telegram within ~30s and the invest workflow is
+          # dispatched immediately. Runs every 5 min via cron, so coverage is
+          # effectively continuous without a run that outlives its timeout.
           POLL_INTERVAL_S: '30'
-          POLL_ITERATIONS: '90'
-        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || '90' }} --interval ${{ vars.POLL_INTERVAL_S || '30' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
+          POLL_ITERATIONS: '8'
+        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || '8' }} --interval ${{ vars.POLL_INTERVAL_S || '30' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
       - name: Commit and publish updated data (state persistence — dedup across runs)
         run: |

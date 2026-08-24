@@ -15,8 +15,13 @@ def _text(name: str) -> str:
 def test_scraper_notification_overrides_match_policy():
     workflow = _text("scrape.yml")
     assert "POLL_INTERVAL_S: '30'" in workflow
-    assert "POLL_ITERATIONS: '90'" in workflow
-    assert "--iterations ${{ vars.POLL_ITERATIONS || '90' }} --interval ${{ vars.POLL_INTERVAL_S || '30' }}" in workflow
+    assert "POLL_ITERATIONS: '8'" in workflow
+    assert "--iterations ${{ vars.POLL_ITERATIONS || '8' }} --interval ${{ vars.POLL_INTERVAL_S || '30' }}" in workflow
+    # The 8x30s burst must fit comfortably under the job timeout so a run is
+    # never cancelled mid-loop (the old 90x30s=45min loop collided with
+    # timeout-minutes and backfilled the queue, delaying notifications).
+    assert "timeout-minutes: 10" in workflow
+    assert "cron: '*/5 * * * *'" in workflow
     assert "NOTIFY_MIN_RATE_PCT: ${{ vars.NOTIFY_MIN_RATE_PCT || '40' }}" in workflow
     assert "NOTIFY_BUCKET_MIN_RATE_PCT: ${{ vars.NOTIFY_BUCKET_MIN_RATE_PCT || '0' }}" in workflow
     assert "NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}" in workflow

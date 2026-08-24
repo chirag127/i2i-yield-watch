@@ -136,11 +136,27 @@ def main(argv: list[str] | None = None) -> int:
         storage._write_json("notifications-sent.json", [])
         log.info("notify-state + notifications-sent RESET — next run re-announces all qualifying loans")
 
+    # Build ONE authed client and reuse it across every iteration. The old
+    # code re-logged-in on every pass (90 logins per run) — a wasted
+    # round-trip per poll. One login per run; direct HTTP is the only scrape
+    # path (Playwright is never used for actual scraping).
+    client = None
+    if args.iterations > 0:
+        try:
+            from .client import I2iClient
+            client = I2iClient.from_env()
+            log.info("i2i session ready (one login reused across %d iterations)",
+                     args.iterations)
+        except SystemExit as e:
+            log.warning("no i2i creds; each iteration will fail loudly: %s", e)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not pre-auth client: %s", e)
+
     rc = 0
     for i in range(1, args.iterations + 1):
         log.info("=== iteration %d/%d ===", i, args.iterations)
         try:
-            summary = run()
+            summary = run(client=client)
             log.info("iteration %d done: %s", i, summary["notificationsSent"])
         except Exception as e:  # noqa: BLE001
             log.error("iteration %d failed: %s", i, e)

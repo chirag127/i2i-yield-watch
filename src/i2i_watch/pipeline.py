@@ -207,8 +207,12 @@ def _bucket_message(active: list[dict], current: dict[str, list[str]],
     return "\n".join(lines)
 
 
-def run(raw_rows: list[dict] | None = None) -> dict:
-    """One scrape cycle. Returns a summary dict. Raises on hard failure."""
+def run(raw_rows: list[dict] | None = None, client=None) -> dict:
+    """One scrape cycle. Returns a summary dict. Raises on hard failure.
+
+    ``client`` may be a shared I2iClient to reuse one login across the whole
+    poll loop instead of re-logging-in every pass (the historical per-pass
+    login added a wasted round-trip to every 30s poll)."""
     run_id = f"run_{int(time.time() * 1000)}"
     started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -216,7 +220,7 @@ def run(raw_rows: list[dict] | None = None) -> dict:
     if jitter_max > 0:
         time.sleep(random.randint(0, jitter_max) / 1000)
 
-    raw = raw_rows if raw_rows is not None else fetch_all_loans()
+    raw = raw_rows if raw_rows is not None else fetch_all_loans(client=client)
     log.info("fetched %d raw rows", len(raw))
     fresh = transform_loans(raw)
     log.info("transformed %d loans", len(fresh))
