@@ -312,11 +312,12 @@ def test_main_continuous_success_polls_forever(monkeypatch):
         result["rc"] = bot.main(["--iterations", "0", "--timeout", "1"])
     th = threading.Thread(target=run, daemon=True)
     th.start()
-    # NOTE: bot.time IS the global time module, so its sleep is patched to a
-    # no-op — wait on a time.time() deadline instead of time.sleep().
-    deadline = time.time() + 0.4
-    while time.time() < deadline and th.is_alive():
-        pass
+    # Wait until we see at least 3 polls OR 2 seconds elapse (whichever
+    # comes first). This is timing-independent: we don't assert on wall-clock
+    # time, only that the bot keeps polling.
+    deadline = time.time() + 2.0
+    while len(calls) < 3 and time.time() < deadline and th.is_alive():
+        time.sleep(0.01)
     # Must still be polling — continuous mode never exits on its own.
     assert th.is_alive()
     assert len(calls) >= 3  # polled repeatedly
@@ -357,9 +358,10 @@ def test_main_continuous_recovers_after_transient_failure(monkeypatch):
         result["rc"] = bot.main(["--iterations", "0", "--timeout", "1", "--max-failures", "3"])
     th = threading.Thread(target=run, daemon=True)
     th.start()
-    deadline = time.time() + 0.3
-    while time.time() < deadline and th.is_alive():
-        pass
+    # Wait until at least 1 poll completed OR 2 seconds elapse.
+    deadline = time.time() + 2.0
+    while calls["n"] < 1 and time.time() < deadline and th.is_alive():
+        time.sleep(0.01)
     assert th.is_alive()  # still polling after failure #1 + successes
     monkeypatch.setattr(bot, "get_updates", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("kill")))
     for _ in range(30):
