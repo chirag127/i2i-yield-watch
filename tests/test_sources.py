@@ -98,6 +98,16 @@ def test_fetch_all_loans_browser_fallback_enabled_uses_browser(monkeypatch):
         def list_loans(self):
             raise TimeoutError("direct listing timed out")
 
+    # The fallback presence-check imports playwright.sync_api; in CI (scrape.yml's
+    # venv has no browser extra) it is NOT installed, so simulate it so this test
+    # exercises the fallback logic regardless of the environment.
+    import sys, types
+    pw = types.ModuleType("playwright")
+    pw_sync = types.ModuleType("playwright.sync_api")
+    pw.sync_api = pw_sync
+    monkeypatch.setitem(sys.modules, "playwright", pw)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", pw_sync)
+
     monkeypatch.setattr(i2i, "_scrape_once", lambda: [{"pl_bloan_id": 42}])
     rows = i2i.fetch_all_loans(client=_Broken())
     assert rows == [{"pl_bloan_id": 42}]
