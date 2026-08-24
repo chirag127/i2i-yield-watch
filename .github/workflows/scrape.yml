@@ -249,6 +249,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     if: always()
+    concurrency:
+      group: scraper-deploy
+      cancel-in-progress: true
 
     environment:
       name: github-pages
