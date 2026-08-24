@@ -7,7 +7,7 @@ THREE DISTINCT notification/investment gates — DO NOT CONFLATE (env var == con
   name                    | default | meaning                       | operator
   ------------------------|---------|-------------------------------|---------
   NOTIFY_MIN_RATE_PCT     | 40      | DETAILED ALERT                | rate >  this
-  NOTIFY_BUCKET_MIN_RATE_PCT| 30     | SILENT BUCKET SUMMARY         | rate >  this
+  NOTIFY_BUCKET_MIN_RATE_PCT| 0      | SILENT BUCKET SUMMARY (ALL)   | rate >  this (0 = all loans)
   AUTOINVEST_MIN_RATE_PCT | 100     | PLACE REAL MONEY              | rate >  this
 
 NOTIFY = free/read-only (Telegram/ntfy). BUCKET notifications are silent summaries. AUTOINVEST = spends money; 100 places
@@ -32,11 +32,16 @@ def _f(env: str, default: float) -> float:
 
 # ── rate gates (two distinct thresholds — do NOT conflate; see table above) ──
 NOTIFY_MIN_RATE_PCT: float = _f("NOTIFY_MIN_RATE_PCT", 40.0)          # detailed alert gate (rate >)
-NOTIFY_BUCKET_MIN_RATE_PCT: float = _f("NOTIFY_BUCKET_MIN_RATE_PCT", 30.0) # silent bucket gate (rate >)
+NOTIFY_BUCKET_MIN_RATE_PCT: float = _f("NOTIFY_BUCKET_MIN_RATE_PCT", 0.0) # silent bucket gate (rate >); 0 = ALL loans
 NOTIFY_HIGH_RATE_PCT: float = _f("NOTIFY_HIGH_RATE_PCT", 100.0)       # LOUD alert gate (rate >)
 # Bucket boundaries are lower-inclusive and upper-exclusive, except the final
-# bucket. Keep these stable so a loan moving from 39.9% to 40% is observable.
+# bucket. Keep these stable so a loan moving across a boundary is observable.
+# Covers the full i2i marketplace rate spectrum from 0% to 100%+.
 NOTIFY_BUCKETS: tuple[tuple[str, float, float | None], ...] = (
+    ("0-10", 0.0, 10.0),
+    ("10-18", 10.0, 18.0),
+    ("18-24", 18.0, 24.0),
+    ("24-30", 24.0, 30.0),
     ("30-40", 30.0, 40.0),
     ("40-50", 40.0, 50.0),
     ("50-70", 50.0, 70.0),

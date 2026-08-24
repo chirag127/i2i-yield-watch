@@ -88,7 +88,7 @@ jobs:
           PRIORITY_HIGH_RATE_PCT: ${{ vars.PRIORITY_HIGH_RATE_PCT || '70' }}
           PRIORITY_MEDIUM_RATE_PCT: ${{ vars.PRIORITY_MEDIUM_RATE_PCT || '50' }}
           NOTIFY_MIN_RATE_PCT: ${{ vars.NOTIFY_MIN_RATE_PCT || '40' }}
-          NOTIFY_BUCKET_MIN_RATE_PCT: ${{ vars.NOTIFY_BUCKET_MIN_RATE_PCT || '30' }}
+          NOTIFY_BUCKET_MIN_RATE_PCT: ${{ vars.NOTIFY_BUCKET_MIN_RATE_PCT || '0' }}
           NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}
           I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS || '6' }}
           STARTUP_JITTER_MS: ${{ vars.STARTUP_JITTER_MS || '2000' }}

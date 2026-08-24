@@ -19,6 +19,7 @@ log = logging.getLogger("i2i_watch")
 
 SAFE_CHUNK = 3800
 DEFAULT_NTFY_BASE = "https://ntfy.sh"
+TELEGRAM_RETRY_MAX_S = 30.0
 
 
 def _esc(s: object) -> str:
@@ -90,6 +91,54 @@ def chunk_messages(loans: list[dict], header: str, footer: str) -> list[str]:
     return messages
 
 
+def _response_json(response: object) -> dict:
+    """Read a Telegram JSON response without making test doubles brittle."""
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _telegram_post(payload: dict) -> bool:
+    """Send one Telegram message and retry one server-requested backoff.
+
+    Telegram can return HTTP 200 with ``ok: false``. Treat that as delivery
+    failure so notification state is retried on the next scrape. A 429 response
+    may include ``parameters.retry_after``; honor it once, capped to keep a
+    broken endpoint from consuming the whole scraper job.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    for attempt in range(2):
+        try:
+            response = httpx.post(url, json=payload, timeout=20)
+            body = _response_json(response)
+            status_code = getattr(response, "status_code", 200)
+            if status_code == 429 and attempt == 0:
+                retry_after = body.get("parameters", {}).get("retry_after", 0)
+                try:
+                    delay = min(max(float(retry_after), 0.0), TELEGRAM_RETRY_MAX_S)
+                except (TypeError, ValueError):
+                    delay = 0.0
+                log.warning("telegram: rate limited; retrying in %.1fs", delay)
+                if delay:
+                    time.sleep(delay)
+                continue
+            response.raise_for_status()
+            if body and body.get("ok") is False:
+                log.warning("telegram: API rejected message: %s", body.get("description", "unknown error"))
+                return False
+            return body.get("ok", True) is True
+        except Exception as e:  # noqa: BLE001
+            log.warning("telegram: request failed (attempt %d/2): %s", attempt + 1, e)
+            if attempt == 1:
+                return False
+    return False
+
+
 def send_telegram(
     loans: list[dict], stats: dict, dashboard_url: str, rate_threshold: float = 50.0
 ) -> bool:
@@ -108,17 +157,13 @@ def send_telegram(
     all_ok = True
     for i, msg in enumerate(messages):
         try:
-            r = httpx.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": msg,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                },
-                timeout=20,
-            )
-            r.raise_for_status()
+            if not _telegram_post({
+                "chat_id": chat_id,
+                "text": msg,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }):
+                raise RuntimeError("Telegram API did not accept the message")
             log.info("telegram: chunk %d/%d sent", i + 1, len(messages))
         except Exception as e:  # noqa: BLE001
             all_ok = False
@@ -210,13 +255,7 @@ def send_telegram_text(text: str, silent: bool = False) -> bool:
     if silent:
         payload["disable_notification"] = True
     try:
-        r = httpx.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json=payload,
-            timeout=20,
-        )
-        r.raise_for_status()
-        return True
+        return _telegram_post(payload)
     except Exception as e:  # noqa: BLE001
         log.warning("telegram: send_telegram_text failed: %s", e)
         return False

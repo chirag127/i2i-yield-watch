@@ -16,6 +16,7 @@ from . import storage
 from .notify.channels import notify_all, send_telegram_text, was_any_channel_successful
 from .sources.i2i import fetch_all_loans
 from .transform import transform_loans
+from .scorer import sort_loans
 
 log = logging.getLogger("i2i_watch")
 
@@ -69,11 +70,16 @@ def _digest_due(prev_notified_at: str | None, hours: float) -> bool:
 
 
 def _bucket_snapshot(active: list[dict]) -> dict[str, list[str]]:
-    """Return stable >30% notification buckets keyed by loan IDs."""
+    """Return stable rate-notification buckets keyed by loan IDs.
+    When NOTIFY_BUCKET_MIN_RATE_PCT is 0 (the default), ALL active loans are
+    bucketed — this gives a full market view rather than only >30% loans.
+    When set to a positive value, loans at or below that rate are excluded.
+    """
+    min_rate = _bucket_min_threshold()
     snapshot = {name: [] for name, _low, _high in C.NOTIFY_BUCKETS}
     for loan in active:
         rate = loan.get("interestRate")
-        if rate is None or rate <= _bucket_min_threshold():
+        if rate is None or rate <= min_rate:
             continue
         for index, (name, low, high) in enumerate(C.NOTIFY_BUCKETS):
             lower_match = rate > low if index == 0 else rate >= low
@@ -87,15 +93,13 @@ def _bucket_message(active: list[dict], current: dict[str, list[str]],
                     previous: dict[str, list[str]]) -> str:
     """Build a compact, silent bucket update with links only for entrants."""
     by_id = {str(loan["loanId"]): loan for loan in active}
-    lines = ["📊 <b>LOAN RATE BUCKET UPDATE (&gt;30%)</b>"]
+    lines = ["📊 <b>LOAN RATE BUCKET SUMMARY (ALL RATES)</b>"]
     for name, _low, _high in C.NOTIFY_BUCKETS:
         ids = current.get(name, [])
         lines.append(f"• <b>{name}%</b>: {len(ids)} loan(s)")
         entered = [loan_id for loan_id in ids if loan_id not in set(previous.get(name, []))]
-        for loan_id in entered:
-            loan = by_id.get(loan_id)
-            if not loan:
-                continue
+        for loan in sort_loans([by_id[loan_id] for loan_id in entered if loan_id in by_id]):
+            loan_id = str(loan["loanId"])
             rate = loan.get("interestRate")
             url = loan.get("loanUrl") or ""
             label = f"Loan {loan_id}"
@@ -149,9 +153,9 @@ def run(raw_rows: list[dict] | None = None) -> dict:
 
     prev_state = storage.load_notify_state()
 
-    # Silent bucket tier — visible coverage for 30-40% loans without sending a
-    # full loan-by-loan alert. State advances only after Telegram delivery, so a
-    # transient outage retries the same change on the next scrape.
+    # Silent bucket tier — full market rate coverage across all active loans.
+    # State advances only after Telegram delivery, so a transient outage
+    # retries the same change on the next scrape.
     bucket_snapshot = _bucket_snapshot(active)
     previous_buckets = {
         str(name): sorted({str(x) for x in ids})
@@ -218,12 +222,15 @@ def run(raw_rows: list[dict] | None = None) -> dict:
         from .scorer import has_no_credit, imputed_credit
 
         credit_gate = C.AUTOINVEST_MIN_CREDIT_SCORE
-        high_to_send = [ln for ln in high if str(ln["loanId"]) in new_high_ids]
+        high_to_send = sort_loans([
+            ln for ln in high if str(ln["loanId"]) in new_high_ids
+        ])
         try:
             lines = [f"🔔 <b>NEW LOAN &gt;{high_threshold:g}% — AUTO-INVEST CANDIDATE</b>"]
             for ln in high_to_send:
                 url = ln.get("loanUrl") or ""
-                name = f'<a href="{url}">Loan {ln["loanId"]}</a>' if url else f'Loan {ln["loanId"]}'
+                name = (f'<a href="{escape(url, quote=True)}">Loan {ln["loanId"]}</a>'
+                        if url else f'Loan {ln["loanId"]}')
                 # The rate is guaranteed > high_threshold here, but the INVESTOR
                 # also applies the credit gate (>=700, no-score imputed 720). Label
                 # the loan with its true investability so the "candidate" alert is

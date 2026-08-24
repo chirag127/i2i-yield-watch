@@ -19,8 +19,9 @@ log = logging.getLogger("i2i_watch")
 TARGET_URL = "https://www.i2ifunding.com/borrower/listing"
 API_MARKER = "getActiveFilteredBorrowers"
 NAV_TIMEOUT_MS = 30000
-INITIAL_XHR_WAIT_MS = 8000  # wait after navigation for the page's own XHR to fire
-CLICK_WAIT_MS = 3500
+INITIAL_XHR_WAIT_MS = 8000  # hard ceiling; return as soon as the XHR arrives
+CLICK_WAIT_MS = 3500         # hard ceiling after each pagination click
+WAIT_POLL_MS = 100
 MAX_SHOW_MORE = 30
 MAX_RETRIES = 3
 RETRY_DELAY_S = 5
@@ -40,6 +41,24 @@ USER_AGENT = (
 
 def _row_id(r: dict) -> str:
     return str(r.get("pl_bloan_id") or r.get("pl_id") or "")
+
+
+def _wait_for_response_generation(page, state: dict[str, int], baseline: int,
+                                  timeout_ms: int) -> bool:
+    """Wait for a valid marketplace response without sleeping the full ceiling.
+
+    Playwright's response callback updates ``state['valid_responses']``. Polling
+    in short slices keeps this helper easy to fake in unit tests while returning
+    immediately when the Angular request finishes.
+    """
+    elapsed = 0
+    while elapsed < timeout_ms:
+        if state.get("valid_responses", 0) > baseline:
+            return True
+        step = min(WAIT_POLL_MS, timeout_ms - elapsed)
+        page.wait_for_timeout(step)
+        elapsed += step
+    return state.get("valid_responses", 0) > baseline
 
 
 def _scrape_once() -> list[dict]:
@@ -63,16 +82,24 @@ def _scrape_once() -> list[dict]:
             # Attach XHR listener BEFORE navigation so the page-1 XHR is not missed.
             # page.evaluate() fetch is CORS-blocked; we rely on the page's own XHR.
             rows_by_id: dict[str, dict] = {}
+            response_state = {"responses": 0, "valid_responses": 0}
 
             def on_response(resp):
-                if API_MARKER not in resp.url or resp.status != 200:
+                if API_MARKER not in resp.url:
+                    return
+                response_state["responses"] += 1
+                if resp.status != 200:
+                    log.warning("listing response returned HTTP %s", resp.status)
                     return
                 try:
                     data = resp.json()
                 except Exception:  # noqa: BLE001
+                    log.warning("listing response was not valid JSON")
                     return
                 if not isinstance(data, list):
+                    log.warning("listing response JSON was %s, expected list", type(data).__name__)
                     return
+                response_state["valid_responses"] += 1
                 for r in data:
                     rid = _row_id(r)
                     if rid and rid not in rows_by_id:
@@ -86,8 +113,10 @@ def _scrape_once() -> list[dict]:
             except Exception as e:  # noqa: BLE001
                 log.warning("goto issue (continuing): %s", str(e)[:80])
 
-            # Wait for the Angular app to fire its initial XHR batch.
-            page.wait_for_timeout(INITIAL_XHR_WAIT_MS)
+            # Wait for the Angular app to fire its initial XHR batch. The timeout
+            # is only a ceiling; successful responses return immediately.
+            if not _wait_for_response_generation(page, response_state, 0, INITIAL_XHR_WAIT_MS):
+                log.warning("initial listing response did not arrive within %dms", INITIAL_XHR_WAIT_MS)
             log.info("after initial wait: %d rows captured", len(rows_by_id))
 
             # Paginate via Show More until stable.
@@ -103,8 +132,13 @@ def _scrape_once() -> list[dict]:
                     if not btn.count() or not btn.is_visible():
                         log.info("no more 'Show More' at click %d", click)
                         break
+                    before_response = response_state["valid_responses"]
                     btn.click(timeout=5000)
-                    page.wait_for_timeout(CLICK_WAIT_MS)
+                    if not _wait_for_response_generation(
+                        page, response_state, before_response, CLICK_WAIT_MS
+                    ):
+                        log.info("Show More click %d produced no listing response within %dms",
+                                 click, CLICK_WAIT_MS)
                 except Exception as e:  # noqa: BLE001
                     log.info("Show More click %d ended: %s", click, str(e)[:60])
                     break

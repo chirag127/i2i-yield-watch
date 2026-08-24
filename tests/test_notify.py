@@ -2,6 +2,19 @@
 
 import i2i_watch.notify.channels as ch
 
+
+class FakeResponse:
+    def __init__(self, status_code=200, body=None):
+        self.status_code = status_code
+        self._body = body if body is not None else {"ok": True}
+
+    def json(self):
+        return self._body
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
 LOAN = {
     "loanId": "500123",
     "borrowerRef": "88001",
@@ -107,6 +120,41 @@ def test_notify_all_telegram_gate_accepts_nonlowercase(monkeypatch):
     monkeypatch.setattr(ch, "send_telegram", spy)
     ch.notify_all([LOAN], {}, "https://d/", 40)
     assert calls.get("ran") is True
+
+
+def test_sorting_is_rate_then_credit(monkeypatch):
+    loans = [
+        {**LOAN, "loanId": "low-rate-high-credit", "interestRate": 50, "creditScoreNumeric": 900},
+        {**LOAN, "loanId": "high-rate-low-credit", "interestRate": 60, "creditScoreNumeric": 700},
+        {**LOAN, "loanId": "high-rate-high-credit", "interestRate": 60, "creditScoreNumeric": 800},
+    ]
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    sent = []
+    monkeypatch.setattr(ch, "_telegram_post", lambda payload: sent.append(payload["text"]) or True)
+    assert ch.send_telegram(loans, {}, "https://d/", 40) is True
+    text = sent[0]
+    assert text.index("high-rate-high-credit") < text.index("high-rate-low-credit")
+    assert text.index("high-rate-low-credit") < text.index("low-rate-high-credit")
+
+
+def test_telegram_api_ok_false_is_delivery_failure(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr(ch.httpx, "post", lambda *a, **k: FakeResponse(body={"ok": False, "description": "blocked"}))
+    assert ch.send_telegram_text("hello") is False
+
+
+def test_telegram_rate_limit_retries_once(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    responses = iter([
+        FakeResponse(status_code=429, body={"ok": False, "parameters": {"retry_after": 0}}),
+        FakeResponse(body={"ok": True}),
+    ])
+    calls = []
+    monkeypatch.setattr(ch.httpx, "post", lambda *a, **k: calls.append(1) or next(responses))
+    assert ch.send_telegram_text("hello") is True
+    assert len(calls) == 2
 
 
 def test_header_says_high_yield_not_new():

@@ -224,6 +224,11 @@ def test_loud_tier_high_gate_from_env(json_backend, capture_notify, monkeypatch)
 
 def test_bucket_boundaries_and_snapshot():
     rows = [
+        {"loanId": "5", "interestRate": 5.0},
+        {"loanId": "10", "interestRate": 10.0},
+        {"loanId": "15", "interestRate": 15.0},
+        {"loanId": "18", "interestRate": 18.0},
+        {"loanId": "29", "interestRate": 29.0},
         {"loanId": "30", "interestRate": 30.0},
         {"loanId": "31", "interestRate": 30.01},
         {"loanId": "40", "interestRate": 40.0},
@@ -233,7 +238,11 @@ def test_bucket_boundaries_and_snapshot():
         {"loanId": "101", "interestRate": 100.01},
     ]
     snapshot = pipeline._bucket_snapshot(rows)
-    assert snapshot["30-40"] == ["31"]
+    assert snapshot["0-10"] == ["5"]
+    assert snapshot["10-18"] == ["10", "15"]
+    assert snapshot["18-24"] == ["18"]
+    assert snapshot["24-30"] == ["29"]
+    assert snapshot["30-40"] == ["30", "31"]
     assert snapshot["40-50"] == ["40"]
     assert snapshot["50-70"] == ["50"]
     assert snapshot["70-100"] == ["70"]
@@ -266,6 +275,32 @@ def test_bucket_summary_is_silent_change_only_and_has_new_links(
     assert len(bucket_messages) == 2
     assert "88040/40" in bucket_messages[-1]
     assert "88030/30" not in bucket_messages[-1]
+
+
+def test_bucket_summary_includes_low_rate_loans(json_backend, capture_notify, monkeypatch):
+    """Loans below 30% must appear in the all-rate bucket summary."""
+    bucket_messages = []
+
+    def fake_send_text(text, silent=False):
+        if silent:
+            bucket_messages.append(text)
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+    low = _loan("low1", 15.0)
+    low["pl_user_id"] = "12001"
+    pipeline.run(raw_rows=[low])
+    assert len(bucket_messages) == 1
+    assert "10-18" in bucket_messages[0]
+    assert "12001" in bucket_messages[0]
+    assert "ALL RATES" in bucket_messages[0]
+
+    mid = _loan("mid1", 25.0)
+    mid["pl_user_id"] = "12002"
+    pipeline.run(raw_rows=[low, mid])
+    assert len(bucket_messages) == 2
+    assert "18-24" in bucket_messages[-1] or "24-30" in bucket_messages[-1]
+    assert "12002" in bucket_messages[-1]
 
 
 def test_bucket_summary_retries_after_failed_delivery(json_backend, capture_notify, monkeypatch):
