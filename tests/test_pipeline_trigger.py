@@ -303,6 +303,35 @@ def test_bucket_summary_includes_low_rate_loans(json_backend, capture_notify, mo
     assert "12002" in bucket_messages[-1]
 
 
+def test_bucket_message_includes_totals_and_averages(json_backend, capture_notify, monkeypatch):
+    """Bucket messages must include per-bucket amount left, avg rate, avg credit,
+    and a market-wide summary footer."""
+    bucket_messages = []
+
+    def fake_send_text(text, silent=False):
+        if silent:
+            bucket_messages.append(text)
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+    # Two loans: one at 50% (₹20k left) and one at 35% (₹20k left), both credit 742
+    pipeline.run(raw_rows=[_loan("a", 50.0), _loan("b", 35.0)])
+    msg = bucket_messages[0]
+    # Per-bucket stats present
+    assert "Amount left" in msg
+    assert "Avg rate" in msg
+    assert "Avg credit" in msg
+    # Market overview footer
+    assert "MARKET OVERVIEW" in msg
+    assert "Active: 2" in msg
+    # Total left should be sum of two ₹20,000 = ₹40,000
+    assert "40,000" in msg
+    # Avg rate = (50 + 35) / 2 = 42.5%
+    assert "42.5%" in msg
+    # Avg credit = 742
+    assert "742" in msg
+
+
 def test_bucket_summary_retries_after_failed_delivery(json_backend, capture_notify, monkeypatch):
     attempts = []
 

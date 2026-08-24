@@ -17,6 +17,7 @@ from .notify.channels import notify_all, send_telegram_text, was_any_channel_suc
 from .sources.i2i import fetch_all_loans
 from .transform import transform_loans
 from .scorer import sort_loans
+from .util import inr
 
 log = logging.getLogger("i2i_watch")
 
@@ -89,24 +90,92 @@ def _bucket_snapshot(active: list[dict]) -> dict[str, list[str]]:
     return {name: sorted(ids) for name, ids in snapshot.items()}
 
 
+def _bucket_stats(loans: list[dict]) -> dict:
+    """Compute aggregate stats for a list of loans: count, total amount left,
+    average rate, average credit score, and risk-category distribution."""
+    n = len(loans)
+    if n == 0:
+        return {"count": 0, "totalLeft": 0, "avgRate": None, "avgCredit": None,
+                "risks": {}}
+    rates = [l.get("interestRate") for l in loans if l.get("interestRate") is not None]
+    credits = [l.get("creditScoreNumeric") for l in loans
+               if l.get("creditScoreNumeric") is not None]
+    total_left = sum(l.get("amountLeft") or 0 for l in loans)
+    risks: dict[str, int] = {}
+    for l in loans:
+        rc = l.get("riskCategory")
+        key = rc if rc else "Unrated"
+        risks[key] = risks.get(key, 0) + 1
+    return {
+        "count": n,
+        "totalLeft": round(total_left, 2),
+        "avgRate": round(sum(rates) / len(rates), 2) if rates else None,
+        "avgCredit": round(sum(credits) / len(credits), 1) if credits else None,
+        "risks": dict(sorted(risks.items(), key=lambda x: -x[1])),
+    }
+
+
 def _bucket_message(active: list[dict], current: dict[str, list[str]],
                     previous: dict[str, list[str]]) -> str:
-    """Build a compact, silent bucket update with links only for entrants."""
+    """Build a silent bucket summary with per-bucket totals, averages, and a
+    market-wide footer. Links are shown only for newly entering loans."""
     by_id = {str(loan["loanId"]): loan for loan in active}
     lines = ["📊 <b>LOAN RATE BUCKET SUMMARY (ALL RATES)</b>"]
+    lines.append("")  # blank line after header
+
+    # ── per-bucket stats ──
+    any_nonzero = False
     for name, _low, _high in C.NOTIFY_BUCKETS:
         ids = current.get(name, [])
-        lines.append(f"• <b>{name}%</b>: {len(ids)} loan(s)")
-        entered = [loan_id for loan_id in ids if loan_id not in set(previous.get(name, []))]
-        for loan in sort_loans([by_id[loan_id] for loan_id in entered if loan_id in by_id]):
-            loan_id = str(loan["loanId"])
+        bucket_loans = [by_id[lid] for lid in ids if lid in by_id]
+        st = _bucket_stats(bucket_loans)
+        if st["count"] == 0:
+            lines.append(f"• <b>{name}%</b>: 0 loans")
+            continue
+        any_nonzero = True
+        total_str = inr(st["totalLeft"]) or "₹0"
+        avg_r = f"{st['avgRate']:.1f}%" if st["avgRate"] is not None else "—"
+        avg_c = f"{st['avgCredit']:.0f}" if st["avgCredit"] is not None else "—"
+        lines.append(
+            f"• <b>{name}%</b>: {st['count']} loan(s) | "
+            f"Amount left: {total_str} | Avg rate: {avg_r} | Avg credit: {avg_c}"
+        )
+        # Show risk breakdown if more than one category
+        if len(st["risks"]) > 1:
+            risk_str = ", ".join(f"{k}:{v}" for k, v in st["risks"].items())
+            lines.append(f"    Risk: {risk_str}")
+        # Links only for newly entering loans
+        entered = [lid for lid in ids if lid not in set(previous.get(name, []))]
+        for loan in sort_loans([by_id[lid] for lid in entered if lid in by_id]):
+            lid = str(loan["loanId"])
             rate = loan.get("interestRate")
+            amt = inr(loan.get("amountLeft")) or "?"
             url = loan.get("loanUrl") or ""
-            label = f"Loan {loan_id}"
+            label = f"Loan {lid}"
             if url:
                 label = f'<a href="{escape(url, quote=True)}">{label}</a>'
-            lines.append(f"  ↳ {label} — {rate:.2f}%")
-    lines.append("\n<i>Silent update: links are only shown for loans newly entering a bucket.</i>")
+            credit = loan.get("creditScore") or "No Score"
+            lines.append(
+                f"    ↳ {label} — {rate:.2f}% | {amt} left | {credit}"
+            )
+
+    # ── market-wide summary footer ──
+    all_stats = _bucket_stats(active)
+    lines.append("")
+    lines.append("<b>── MARKET OVERVIEW ──</b>")
+    total_str = inr(all_stats["totalLeft"]) or "₹0"
+    avg_r = f"{all_stats['avgRate']:.1f}%" if all_stats["avgRate"] is not None else "—"
+    avg_c = f"{all_stats['avgCredit']:.0f}" if all_stats["avgCredit"] is not None else "—"
+    lines.append(
+        f"Active: {all_stats['count']} loans | Total left: {total_str} | "
+        f"Avg rate: {avg_r} | Avg credit: {avg_c}"
+    )
+    if all_stats["risks"]:
+        risk_str = ", ".join(f"{k}:{v}" for k, v in all_stats["risks"].items())
+        lines.append(f"Risk: {risk_str}")
+
+    lines.append("")
+    lines.append("<i>Silent update: links only for loans newly entering a bucket.</i>")
     return "\n".join(lines)
 
 
