@@ -47,6 +47,8 @@ on:
     # it's needed.
     - cron: "6,16,26,36,46,56 4-13 * * *"
   workflow_dispatch: {}
+  repository_dispatch:
+    types: [invest]
 
 permissions:
   contents: write             # commit data/invested-loans*.json back (git-as-DB)

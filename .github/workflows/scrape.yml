@@ -93,13 +93,13 @@ jobs:
           NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}
           I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS || '6' }}
           STARTUP_JITTER_MS: ${{ vars.STARTUP_JITTER_MS || '2000' }}
-          # 25 passes at ~60-second intervals. This gives near-real-time
-          # notification: new loans appear in Telegram within ~60 seconds of
-          # the scrape cycle starting. Each pass is HTTP-only (~10-15s), so
-          # 25 iterations fit in the 45-minute job timeout.
-          POLL_INTERVAL_S: '60'
-          POLL_ITERATIONS: '25'
-        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || '25' }} --interval ${{ vars.POLL_INTERVAL_S || '60' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
+          # 90 passes at ~30-second intervals. New loans appear in Telegram
+          # within ~30 seconds and the invest workflow is dispatched immediately.
+          # Each pass is HTTP-only (~10-15s), so 90 iterations fit in the
+          # 45-minute job timeout (~45min total).
+          POLL_INTERVAL_S: '30'
+          POLL_ITERATIONS: '90'
+        run: .venv-ci/bin/python -m i2i_watch --iterations ${{ vars.POLL_ITERATIONS || '90' }} --interval ${{ vars.POLL_INTERVAL_S || '30' }} -v ${{ github.event.inputs.reset_notify_state == 'true' && '--reset-notify-state' || '' }}
 
       - name: Commit and publish updated data (state persistence — dedup across runs)
         run: |

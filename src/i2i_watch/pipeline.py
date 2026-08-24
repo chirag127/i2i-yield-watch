@@ -22,6 +22,34 @@ from .util import inr
 log = logging.getLogger("i2i_watch")
 
 
+def _dispatch_invest() -> None:
+    """Fire a repository_dispatch event so the invest workflow starts immediately
+    instead of waiting for its next cron tick. Best-effort: if dispatch fails
+    (no GITHUB_TOKEN, network, permissions), the cron fallback still covers it."""
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not token or not repo:
+        log.debug("invest dispatch skipped: no GITHUB_TOKEN or GITHUB_REPOSITORY")
+        return
+    import json as _json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    url = f"https://api.github.com/repos/{repo}/dispatches"
+    body = _json.dumps({"event_type": "invest", "client_payload": {"triggered_by": "scrape"}}).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            log.info("invest workflow dispatched (status %d)", r.status)
+    except urllib.error.HTTPError as e:
+        log.warning("invest dispatch failed: HTTP %d %s", e.code, e.read()[:120])
+    except Exception as e:  # noqa: BLE001
+        log.warning("invest dispatch failed: %s", e)
+
+
 def _rate_threshold() -> float:
     """NOTIFY gate: alert on loans with rate > this. config.NOTIFY_MIN_RATE_PCT
     (default 40), env-overridable via the SAME name NOTIFY_MIN_RATE_PCT."""
@@ -414,6 +442,16 @@ def run(raw_rows: list[dict] | None = None) -> dict:
             log.warning("could not persist loud-tier state: %s", e)
 
     storage.append_changelog(summary)
+
+    # Dispatch invest workflow immediately when qualifying loans are detected,
+    # so real money is placed within seconds instead of waiting for the next
+    # cron tick (up to 10 min). Best-effort: cron fallback still covers it.
+    if qualifying and (new_ids or new_high_ids):
+        try:
+            _dispatch_invest()
+        except Exception as e:  # noqa: BLE001
+            log.warning("invest dispatch failed (cron fallback): %s", e)
+
     log.info(
         "run complete: active=%d new=%d archived=%d qualifying=%d newQ=%d droppedQ=%d "
         "loud=%d loudSent=%s buckets=%s bucketSent=%s",
