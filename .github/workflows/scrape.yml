@@ -19,11 +19,6 @@ name: i2i Yield Watch — Auto Scraper
 # Investment state (invested-loans.json) belongs to invest.yml.
 
 on:
-  # The deploy job runs on this 5-min cron. The scrape job ignores
-  # scheduled triggers (it only starts from workflow_dispatch or tick) —
-  # see the `if:` on the scrape job below.
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       reset_notify_state:
@@ -35,8 +30,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
   actions: write      # self-handoff dispatch via GITHUB_TOKEN
 
 concurrency:
@@ -45,9 +38,6 @@ concurrency:
 
 jobs:
   scrape:
-    # Only run the continuous scraper on manual dispatch or tick pinger —
-    # never on schedule (the deploy job uses the cron trigger).
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 340
 
@@ -240,50 +230,3 @@ jobs:
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
             && echo "failure alert sent" || echo "failure alert send failed"
-
-  # Pages deploy is now a separate independent job on its own 5-min cron.
-  # The scraper runs for ~340 min continuously, so `needs: scrape` would
-  # delay the deploy by hours. Instead, this job deploys whatever data is
-  # on main every 5 min — the scraper pushes data every 60s, so the
-  # dashboard stays fresh without coupling to the scraper lifecycle.
-  deploy:
-    runs-on: ubuntu-latest
-    if: always()
-    concurrency:
-      group: scraper-deploy
-      cancel-in-progress: true
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-          ref: main
-
-      - name: Build Pages artifact (_site = dashboard + data)
-        run: |
-          set -euo pipefail
-          mkdir -p _site
-          cp dashboard/index.html dashboard/app.js dashboard/styles.css _site/
-          cp -r data _site/data
-          test -s _site/index.html
-          test -s _site/data/active-loans.json
-          test -s _site/data/stats.json
-          echo "Pages artifact data timestamp:"
-          grep -m1 'lastUpdated' _site/data/stats.json || true
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v6
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4

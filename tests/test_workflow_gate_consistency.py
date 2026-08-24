@@ -22,13 +22,8 @@ def test_scraper_notification_overrides_match_policy():
     assert "SCRAPE_HANDOFF_MIN" in workflow
     assert "SCRAPE_STATE_PUSH_S" in workflow
     assert "gh workflow run scrape.yml" in workflow  # self-handoff
-    # Deploy is now a separate independent job, not coupled to the scrape
-    # job's lifecycle (the old `needs: scrape` delayed deploy by 340 min).
-    # Check the deploy job header, not the comment that explains it.
-    deploy_section = workflow.split("  deploy:")[1] if "  deploy:" in workflow else ""
-    assert "needs:" not in deploy_section.split("steps:")[0]
-    # Scraper only runs on dispatch/tick, not on schedule (deploy uses cron).
-    assert "github.event_name != 'schedule'" in workflow
+    # Deploy is now in a separate workflow file (deploy.yml).
+    assert "schedule:" not in workflow
     assert "NOTIFY_MIN_RATE_PCT: ${{ vars.NOTIFY_MIN_RATE_PCT || '40' }}" in workflow
     assert "NOTIFY_BUCKET_MIN_RATE_PCT: ${{ vars.NOTIFY_BUCKET_MIN_RATE_PCT || '0' }}" in workflow
     assert "NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}" in workflow
@@ -93,6 +88,20 @@ def test_scraper_is_continuously_alive_with_tick_pinger():
     tick = _text("tick.yml")
     assert "gh workflow run scrape.yml" in tick          # pinger dispatches scraper
     assert 'select(.status != "completed")' in tick      # only if not alive
+
+
+def test_deploy_is_separate_workflow():
+    """The Pages deploy must be in its own workflow file so the scraper's
+    340-min concurrency group can never block dashboard deploys."""
+    deploy_wf = _text("deploy.yml")
+    assert "cron: '*/5 * * * *'" in deploy_wf
+    assert "group: scraper-deploy" in deploy_wf
+    assert "cancel-in-progress: true" in deploy_wf
+    assert "actions/deploy-pages" in deploy_wf
+    # scrape.yml must NOT contain a deploy job anymore.
+    scrape_wf = _text("scrape.yml")
+    assert "deploy:" not in scrape_wf
+    assert "schedule:" not in scrape_wf
 
 
 def test_every_workflow_alert_is_self_identifying():

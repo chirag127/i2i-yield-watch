@@ -1,0 +1,60 @@
+name: i2i Deploy Dashboard
+
+# Deploys the dashboard to GitHub Pages every 5 minutes.
+# Split from scrape.yml so the scraper's `scraper` concurrency group
+# (cancel-in-progress: false, 340-min job) can never block the deploy.
+# The scraper pushes data to main every ~60s; this workflow deploys
+# whatever is on main.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  pages: write
+  id-token: write
+  contents: read
+
+concurrency:
+  group: scraper-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          ref: main
+
+      - name: Build Pages artifact (_site = dashboard + data)
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp dashboard/index.html dashboard/app.js dashboard/styles.css _site/
+          cp -r data _site/data
+          test -s _site/index.html
+          test -s _site/data/active-loans.json
+          test -s _site/data/stats.json
+          echo "Pages artifact data timestamp:"
+          grep -m1 'lastUpdated' _site/data/stats.json || true
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
