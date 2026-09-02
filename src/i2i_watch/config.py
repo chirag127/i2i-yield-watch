@@ -65,6 +65,12 @@ IDLE_WATCHDOG_LOUD: bool = (os.environ.get("IDLE_WATCHDOG_LOUD", "").strip().low
 # Low-escrow threshold (Rs): the wallet-check ping becomes a LOUD alert when the
 # investable balance drops below this, so a drained escrow is never missed.
 WALLET_ALERT_THRESHOLD: float = _f("WALLET_ALERT_THRESHOLD", 10000.0)
+# Escrow-truth TTL (hours): after an i2i investorNow rejection reports the REAL
+# investable escrow balance, trust that figure for this long. availableWallet is
+# a lending-limit-style field, NOT the escrow balance (live-verified 2026-09-02:
+# it read Rs 50,000 while the rejection said Rs 1,093). After this window the
+# API estimate is used again until the next rejection refreshes the truth.
+ESCROW_TRUTH_TTL_HOURS: float = _f("ESCROW_TRUTH_TTL_HOURS", 2.0)
 
 # ── hard caps / sizing ──────────────────────────────────────────────────────
 PER_LOAN_CAP: float = _f("PER_LOAN_CAP", 5000.0)             # never exceed per loan

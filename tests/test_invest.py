@@ -251,6 +251,29 @@ def _sel():
              "score": 720.0, "noCredit": True, "tenure": 6.0, "amtLeft": 5000.0}]
 
 
+def test_cancel_returns_1_when_live_cancel_fails(monkeypatch):
+    """A live cancel that does not fully complete must return non-zero, or the
+    workflow reports success (green run) while money stays invested.
+
+    live-observed 2026-09-02: cancel of 1486852 hit a TimeoutError + missing
+    playwright; cancel.py logged the error but returned 0 -> completed/success
+    with 0 cancelled. This test locks the fix."""
+    from i2i_watch.cancel import run as cancel_run
+
+    class _FailClient:
+        @classmethod
+        def from_env(cls, account=None):
+            return cls()
+
+        def cancel(self, lid, pin):
+            raise RuntimeError("simulated timeout + no fallback")
+
+    monkeypatch.setattr("i2i_watch.cancel.I2iClient", _FailClient)
+    monkeypatch.setenv("I2I_TXN_PIN", "1234")
+    monkeypatch.setattr("i2i_watch.cancel.send_telegram_text", lambda *a, **k: True)
+    assert cancel_run([1486852], live=True, account="chirag") == 1
+
+
 def test_exclude_invested_filters_ids():
     sel = [{"loanId": 1}, {"loanId": 2}, {"loanId": 3}]
     assert [s["loanId"] for s in exclude_invested(sel, {2})] == [1, 3]
@@ -261,6 +284,41 @@ def test_parse_amount_and_max_amount():
     assert parse_amount("Available Balance is Rs. 3000.00") == 3000.0
     assert parse_max_amount("you can invest maximum up to ₹2000.00") == 2000.0
     assert parse_max_amount("already invested ₹3000 in this loan") == 0.0
+
+
+def test_parse_amount_live_low_escrow_rejection():
+    # LIVE 2026-09-02: walletAndFund said availableWallet=50000 but the real
+    # investable escrow (from i2i's own rejection) was Rs 1,093.00.
+    body = ("You can invest in this loan, only if you have sufficient balance in "
+            "your Escrow Account. Available Balance in your Escrow Account for "
+            "investment is Rs. 1093.00.")
+    assert is_low_balance(body) is True
+    assert parse_amount(body) == 1093.0
+
+
+def test_place_persists_escrow_truth_on_low_balance(monkeypatch, tmp_path):
+    """A low-balance rejection must persist the platform's REAL escrow figure,
+    overriding the phantom availableWallet so wallet() trusts it next run."""
+    monkeypatch.setattr(INV.storage, "_data_dir", lambda: tmp_path)
+    c = _FakeClient([_Reject("Available Balance ... for investment is Rs. 1093.00"),
+                     {"data": "Invested Successfully", "message": "Fund added successfully."}])
+    monkeypatch.setenv("I2I_TXN_PIN", "1234")
+    with patch.object(INV.storage, "record_invested"), patch.object(INV, "send_telegram_text"):
+        assert INV._place(c, [], _sel(), 5000.0, 100.0, True, account="chirag") == 0
+    truth = INV.storage.load_escrow_truth("chirag")
+    assert truth and truth["amount"] == 1093.0
+
+
+def test_place_persists_zero_truth_when_drained(monkeypatch, tmp_path):
+    """A REAL 'Rs 0.00' rejection is truth too — escrow drained — and must be
+    persisted so wallet-check stops trusting a stale availableWallet."""
+    monkeypatch.setattr(INV.storage, "_data_dir", lambda: tmp_path)
+    c = _FakeClient([_Reject("Available Balance in your Escrow Account for investment is Rs. 0.00")])
+    monkeypatch.setenv("I2I_NEERU_TXN_PIN", "1234")
+    with patch.object(INV.storage, "record_invested"), patch.object(INV, "send_telegram_text"):
+        assert INV._place(c, [], _sel(), 5000.0, 100.0, True, account="neeru") == 0
+    truth = INV.storage.load_escrow_truth("neeru")
+    assert truth and truth["amount"] == 0.0
 
 
 def test_message_classifiers():
@@ -275,7 +333,8 @@ def test_plan_dedups_within_run():
     assert len(plan) == 1 and plan[0]["amount"] == 5000
 
 
-def test_place_retries_reduced_on_low_balance(monkeypatch):
+def test_place_retries_reduced_on_low_balance(monkeypatch, tmp_path):
+    monkeypatch.setattr(INV.storage, "_data_dir", lambda: tmp_path)  # truth persist stays isolated
     c = _FakeClient([_Reject("Available Balance is Rs. 3000.00"),
                      {"data": "Invested Successfully", "message": "Fund added successfully."}])
     monkeypatch.setenv("I2I_TXN_PIN", "1234")

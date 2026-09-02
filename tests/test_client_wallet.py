@@ -8,8 +8,12 @@ real escrow and ADD BALANCE fired early. No network — _get is faked.
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
+from i2i_watch import storage
 from i2i_watch.client import I2iClient
 from i2i_watch.invest import show_wallet
 
@@ -74,6 +78,48 @@ def test_wallet_falls_back_to_availableFunds_endpoint():
 def test_wallet_zero_when_everything_fails():
     c = _client({"data": {"noWalletHere": 1}})
     assert c.wallet() == pytest.approx(0.0)
+
+
+def test_wallet_prefers_fresh_escrow_truth(monkeypatch, tmp_path):
+    """The platform'sOWN rejection figure (Rs 1,093) wins over the phantom
+    availableWallet=50,000 — the live-scenario lock."""
+    monkeypatch.setattr(storage, "_data_dir", lambda: tmp_path)
+    storage.save_escrow_truth(1093.0, "chirag")
+    c = _client({"data": {
+        "availableWallet": 50000.0,
+        "fundUnderProposal": 0.0,
+        "disbursalPending": 0.0,
+    }})
+    c._account = "chirag"
+    assert c.wallet() == pytest.approx(1093.0)
+
+
+def test_wallet_falls_back_when_truth_stale(monkeypatch, tmp_path):
+    """A stale truth (older than ESCROW_TRUTH_TTL_HOURS) must NOT block a
+    top-up windfall — fall back to the API estimate until a new rejection."""
+    monkeypatch.setattr(storage, "_data_dir", lambda: tmp_path)
+    storage.save_escrow_truth(1093.0, "chirag")
+    old = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+    (tmp_path / "escrow-truth.json").write_text(json.dumps(
+        {"amount": 1093.0, "observedAt": old}), encoding="utf-8")
+    c = _client({"data": {
+        "availableWallet": 50000.0,
+        "fundUnderProposal": 0.0,
+        "disbursalPending": 0.0,
+    }})
+    c._account = "chirag"
+    assert c.wallet() == pytest.approx(50000.0)
+
+
+def test_escrow_truth_is_per_account(monkeypatch, tmp_path):
+    monkeypatch.setattr(storage, "_data_dir", lambda: tmp_path)
+    storage.save_escrow_truth(1000.0, "chirag")
+    storage.save_escrow_truth(2000.0, "neeru")
+    assert (tmp_path / "escrow-truth.json").exists()
+    assert (tmp_path / "escrow-truth-neeru.json").exists()
+    assert storage.load_escrow_truth("chirag")["amount"] == pytest.approx(1000.0)
+    assert storage.load_escrow_truth("neeru")["amount"] == pytest.approx(2000.0)
+    assert storage.load_escrow_truth("unknown-acct") is None
 
 
 def test_show_wallet_prints_real_investable(monkeypatch, capsys):

@@ -467,6 +467,36 @@ def record_invested(loan_ids: list[int], account: str | None = None) -> None:
     log.info("recorded %d invested loan(s) for %s", len(loan_ids), _invested_file(account))
 
 
+def _escrow_truth_file(account: str | None = None) -> str:
+    """Per-account escrow-truth file: escrow-truth.json (default account),
+    escrow-truth-<account>.json for every secondary one — mirrors the
+    invested-loans naming so accounts never share balance state."""
+    from . import accounts
+
+    acct = account or accounts.active_account()
+    return f"escrow-truth{accounts.storage_name(acct)}.json"
+
+
+def load_escrow_truth(account: str | None = None) -> dict | None:
+    """Last balance the platform itself reported on an investorNow rejection:
+    {"amount": float, "observedAt": iso}. None when never observed."""
+    try:
+        d = _load_json(_escrow_truth_file(account), None)
+        if isinstance(d, dict) and d.get("amount") is not None:
+            return d
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def save_escrow_truth(amount: float, account: str | None = None) -> None:
+    """Persist the authoritative investable escrow figure from a rejection, so
+    wallet()/wallet-check and the plan sizing see it without a live order."""
+    _write_json(_escrow_truth_file(account), {
+        "amount": float(amount), "observedAt": _now_iso(),
+    })
+
+
 def load_idle_state() -> dict:
     """Idle-capital watchdog state: {lastQualifiedAt: iso|null} — when the auto-
     investor last saw a qualifying loan. Drives the 'no qualifying loans for N

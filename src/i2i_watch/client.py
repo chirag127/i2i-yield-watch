@@ -21,6 +21,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 from . import config as C
 from .auth import browser_headers, login
@@ -38,9 +39,11 @@ def to_float(v: object, default: float = 0.0) -> float:
 class I2iClient:
     """Session-authed client for both i2i hosts. All money I/O lives here."""
 
-    def __init__(self, csrf: str, sid: str, force_browser: bool = False):
+    def __init__(self, csrf: str, sid: str, force_browser: bool = False,
+                 account: str | None = None):
         self.csrf, self.sid = csrf, sid
         self._force_browser = force_browser
+        self._account = account
 
     @classmethod
     def from_env(cls, account: str | None = None) -> "I2iClient":
@@ -67,15 +70,15 @@ class I2iClient:
         if email and pw:
             try:
                 fresh_csrf, fresh_sid = login(email, pw)
-                return cls(fresh_csrf, fresh_sid, force)
+                return cls(fresh_csrf, fresh_sid, force, acct)
             except Exception:  # noqa: BLE001 — login failed (network, bad creds)
                 if csrf and sid:
                     log.warning("auto-login failed for account %s; falling back to "
                                 "manual CSRF/SESSION tokens", acct)
-                    return cls(csrf, sid, force)
+                    return cls(csrf, sid, force, acct)
                 raise
         if csrf and sid:
-            return cls(csrf, sid, force)
+            return cls(csrf, sid, force, acct)
         raise SystemExit(
             f"no i2i auth for account '{acct}': set "
             f"{accounts.env_key(acct, 'EMAIL')}+{accounts.env_key(acct, 'PASSWORD')} "
@@ -166,18 +169,44 @@ class I2iClient:
 
     # ── reads ────────────────────────────────────────────────────────────────
     def wallet(self) -> float:
-        """Investable escrow balance (Rs). i2i's investorNow validates against the
-        ESCROW account balance, NOT data.availableWallet alone. Live capture showed
-        the SPA reports "Available Balance = Current − Funds Under Proposal/Disbursal"
-        (availableWallet ₹50,000 but only ~₹21k actually investable — the rest was
-        committed to open proposals). So the investable value is:
+        """Investable escrow balance (Rs) — a TWO-layer answer.
 
-            availableWallet − fundUnderProposal − disbursalPending
+        1. TRUTH (authoritative): the last balance i2i's own investorNow
+           rejection reported ("Available Balance ... for investment is Rs X"),
+           persisted per-account, trusted while fresh within ESCROW_TRUTH_TTL_HOURS.
+           Live-verified 2026-09-02: availableWallet read Rs 50,000 while the
+           rejection said Rs 1,093 — the platform validates orders against the
+           real escrow, so the rejection figure is the only honest balance.
+        2. ESTIMATE (fallback): i2i's investorNow validates against the ESCROW
+           account balance, NOT data.availableWallet alone. Live capture showed
+           the SPA reports "Available Balance = Current − Funds Under Proposal/Disbursal"
+           (availableWallet ₹50,000 but only ~₹21k actually investable — the rest was
+           committed to open proposals). So the fallback estimate is:
 
-        computed when availableWallet is present; an explicit escrow/investable
-        field (availableEscrow / escrowBalance / availableForInvestment) wins if
-        present; falls back to availableWallet alone, then availableFunds. Logs
-        the raw keys once so the exact field set is discoverable from run logs."""
+               availableWallet − fundUnderProposal − disbursalPending
+
+           computed when availableWallet is present; an explicit escrow/investable
+           field (availableEscrow / escrowBalance / availableForInvestment) wins if
+           present; falls back to availableWallet alone, then availableFunds. Logs
+           the raw keys once so the exact field set is discoverable from run logs."""
+        from . import storage
+
+        truth = storage.load_escrow_truth(self._account)
+        if truth:
+            age_h = 0.0
+            try:
+                obs = datetime.fromisoformat(truth["observedAt"].replace("Z", "+00:00"))
+                age_h = (datetime.now(timezone.utc) - obs).total_seconds() / 3600.0
+            except (KeyError, TypeError, ValueError):  # malformed/missing date
+                age_h = 0.0  # treat as fresh: the figure itself is the point
+            ttl_h = C._f("ESCROW_TRUTH_TTL_HOURS", C.ESCROW_TRUTH_TTL_HOURS)
+            if age_h <= ttl_h:
+                log.info("wallet(): using escrow-truth Rs %.2f (observed %sh ago)",
+                         truth["amount"], round(age_h, 2))
+                return float(truth["amount"])
+            log.info("wallet(): escrow-truth Rs %.2f is %sh old — stale, "
+                     "falling back to the API estimate",
+                     truth["amount"], round(age_h, 2))
         try:
             d = self._get(C.OPEN_LOANS_HOST, "investor/walletAndFund", timeout=30)
             data = d.get("data", {}) if isinstance(d, dict) else {}

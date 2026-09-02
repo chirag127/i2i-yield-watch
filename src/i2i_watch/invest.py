@@ -310,6 +310,13 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         # still meets the platform minimum. "Invest the remaining amount only."
         if not ok and body and is_low_balance(body):
             avail = parse_amount(body)
+            # The platform just told us its real escrow truth (e.g. "Available
+            # Balance ... for investment is Rs. 1093.00"). Persist it so wallet()
+            # and the plan sizing trust it instead of the phantom availableWallet.
+            try:
+                storage.save_escrow_truth(avail, account=account)
+            except Exception:  # noqa: BLE001
+                pass
             reduced = math.floor(min(avail, p["amount"]) / C.INVEST_MULTIPLE) * C.INVEST_MULTIPLE \
                 if C.INVEST_MULTIPLE else min(avail, p["amount"])
             if reduced >= C.INVEST_MIN_AMOUNT and reduced < p["amount"]:
@@ -333,6 +340,13 @@ def _place(client: I2iClient, loans: list[dict], sel: list[dict],
         if not ok:
             if body and is_low_balance(body):
                 low_balance_msg = str(body)[:200]
+                # A REAL "Rs 0.00" rejection is also truth (escrow now drained);
+                # persist if the message carries any rupee figure.
+                if "rs" in str(body).lower() or "₹" in str(body):
+                    try:
+                        storage.save_escrow_truth(parse_amount(body), account=account)
+                    except Exception:  # noqa: BLE001
+                        pass
                 log.warning("LOW BALANCE on loan %s: %s — STOP placing, will notify", p["loanId"], low_balance_msg)
                 break
             if (body and is_loan_maxed(body)) or is_loan_maxed(msg):
