@@ -63,8 +63,14 @@ def run(loan_ids: list[int], live: bool = False, all_invested: bool = False,
         done.append(lid)
         print(f"  OK cancelled loan {lid} — {msg}")
 
+    failed = [lid for lid in ids if lid not in done]
     if done:
         send_telegram_text("♻️ <b>i2i cancel: reversed "
                            f"{len(done)} funding(s)</b>\n"
                            + "\n".join(f"• Loan {x}" for x in done))
+    if failed:
+        # A live cancel that did NOT fully complete must fail the workflow —
+        # otherwise the run reports success while money stays invested.
+        print(f"cancelled {len(done)}/{len(ids)} funding(s); failed: {failed}")
+        return 1
     return 0

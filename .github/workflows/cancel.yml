@@ -42,10 +42,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup toolchain (cached venv)
+      - name: Setup toolchain (cached venv + Playwright)
         uses: ./.github/actions/setup-i2i
         with:
-          extras: dev
+          extras: browser,dev   # browser: the cancel POST retries in-browser on timeout/502
 
       - name: Cancel funding(s) (LIVE) — reverses escrow
         env:
