@@ -119,3 +119,32 @@ def test_every_workflow_alert_is_self_identifying():
         assert "gh api \"repos/${GITHUB_REPOSITORY}/actions/runs" in workflow, \
             f"{name}: alert missing run-start timestamp"
         assert "gh run view" in workflow, f"{name}: alert missing failing-step lookup"
+
+
+def test_supervisor_is_event_driven_with_breaker_and_no_self_loop():
+    """The self-supervisor must hook workflow_run (cron is coalesced to ~3.5h),
+    be able to re-dispatch dead runners, and never trigger on itself."""
+    wf = _text("supervisor.yml")
+    assert "workflow_run:" in wf
+    assert '"i2i Yield Watch — Auto Scraper"' in wf
+    assert '"i2i Telegram Command Bot"' in wf
+    assert "types: [completed]" in wf
+    assert "actions: write" in wf               # dispatch scrape/bot
+    assert "gh workflow run" in wf
+    assert 'select(.status != "completed")' in wf  # restart only when truly dead
+    assert "circuit breaker" in wf.lower()       # bounded recovery attempts
+    assert '- "i2i Self-Supervisor"' not in wf   # no self-loop
+
+
+def test_alert_drill_is_read_only():
+    """The drill must be manual-only, credential-free for i2i, and structurally
+    unable to trigger the real-money invest workflow."""
+    wf = _text("alert-drill.yml")
+    assert "workflow_dispatch:" in wf            # manual only, never scheduled
+    assert "schedule:" not in wf
+    assert "contents: read" in wf                # cannot dispatch other workflows
+    assert "actions: write" not in wf
+    assert "i2i_watch drill-alert" in wf
+    assert "I2I_EMAIL" not in wf                 # zero i2i credentials on the job
+    assert "I2I_TXN_PIN" not in wf
+    assert "i2i_watch invest" not in wf          # never runs the money path

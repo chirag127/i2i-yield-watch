@@ -1,0 +1,81 @@
+name: i2i Alert Drill (read-only)
+
+# End-to-end proof that the Telegram alert chain works, on demand.
+#
+# Injects ONE synthetic above-threshold loan into the REAL pipeline:
+#   - real transform, real notify tiers, real Telegram send
+#   - storage redirected to an ephemeral temp dir (nothing committed)
+#   - invest dispatch neutralized in code AND permissions: contents read only,
+#     so this workflow can NEVER trigger the real-money invest workflow
+#   - zero i2i credentials on the job (no login/PIN secrets)
+#
+# The message received is labeled [DRILL] in the borrower + purpose fields.
+# Run: Actions -> i2i Alert Drill (read-only) -> Run workflow (rate optional).
+
+on:
+  workflow_dispatch:
+    inputs:
+      rate:
+        description: 'Synthetic loan rate % (default: loud gate + 10)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alert-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Setup toolchain (cached venv)
+        uses: ./.github/actions/setup-i2i
+        with:
+          extras: dev
+
+      - name: Run alert drill (synthetic loan, ephemeral state, no money path)
+        env:
+          I2I_STORAGE: json
+          STARTUP_JITTER_MS: '0'
+          TELEGRAM_ENABLED: '1'
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NOTIFY_MIN_RATE_PCT: ${{ vars.NOTIFY_MIN_RATE_PCT || '40' }}
+          NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}
+          DRILL_RATE: ${{ inputs.rate }}
+        run: |
+          set -euo pipefail
+          if [ -n "$DRILL_RATE" ]; then
+            .venv-ci/bin/python -m i2i_watch drill-alert --rate "$DRILL_RATE" -v
+          else
+            .venv-ci/bin/python -m i2i_watch drill-alert -v
+          fi
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
+          FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
+          MSG="⚠️ <b>i2i ALERT DRILL FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0A${RUN_URL}"
+          curl -sS --max-time 20 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
+            && echo "failure alert sent" || echo "failure alert send failed"

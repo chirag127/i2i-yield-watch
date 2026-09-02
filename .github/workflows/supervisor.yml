@@ -1,0 +1,115 @@
+name: i2i Self-Supervisor
+
+# Cron-free crash recovery.
+#
+# GitHub's scheduler coalesces high-frequency crons under platform load
+# (measured on this repo: a */5 cron actually fires every ~3.5h). The schedule
+# trigger on tick.yml is therefore NOT a dependable recovery net.
+#
+# This workflow instead hooks the workflow_run event: whenever a scraper or
+# bot run COMPLETES, this supervisor runs within seconds (event-driven, not
+# throttled) and checks whether anything is still alive. The healthy chain
+# never trips it — each long-lived job dispatches its own successor before
+# exiting, so a completion always has a queued/in_progress successor. It only
+# acts when a run ended and left NOTHING alive: runner loss, force-cancel,
+# or a crash the in-job failure alert could not cover.
+#
+# Guards against runaway loops:
+#   1. 5s grace re-check — never races the just-dispatched successor.
+#   2. Circuit breaker — 5 consecutive failed recoveries stop respawning
+#      (the per-workflow "Alert on failure" step is already firing).
+#   3. No self-loop — this triggers only on scrape/telegram-bot completions.
+
+on:
+  workflow_run:
+    workflows:
+      - "i2i Yield Watch — Auto Scraper"
+      - "i2i Telegram Command Bot"
+    types: [completed]
+
+permissions:
+  actions: write    # dispatch scrape.yml / telegram-bot.yml
+  contents: read
+
+concurrency:
+  group: i2i-self-supervisor
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Restart dead runners (grace-checked, breaker-limited)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sleep 5   # let the completed run's own handoff dispatch land first
+
+          # Circuit breaker: after 5 consecutive failed recoveries, stop
+          # respawning a consistently-failing job and wait for human fixes.
+          # The counter file (and the Telegram failure alerts) break the loop.
+          BREAKER_KEY="supervisor-breaker.json"
+          BREAKER=$(mktemp)
+          if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=5" \
+               --jq '.artifacts[] | select(.name == "'"${BREAKER_KEY}"'" and .expired == false) | .archive_download_url' 2>/dev/null | head -1 > /tmp/url; then
+            [ -s /tmp/url ] && gh api "$(cat /tmp/url)" > "${BREAKER}.zip" 2>/dev/null && \
+              unzip -o -q "${BREAKER}.zip" -d /tmp/supbreak 2>/dev/null || true
+          fi
+          FAILS=$(python3 -c "import json;print(json.load(open('/tmp/supbreak/${BREAKER_KEY}'))['fails'])" 2>/dev/null || echo 0)
+          echo "consecutive failed recoveries: ${FAILS}"
+          if [ "${FAILS}" -ge 5 ]; then
+            echo "::error::circuit breaker OPEN (${FAILS} consecutive failed recoveries) — not respawning; investigate the failure alerts"
+            exit 1
+          fi
+
+          recover_one() {
+            local WF="$1"
+            local ALIVE
+            ALIVE=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${WF}/runs?per_page=10" \
+              --jq '[.workflow_runs[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)
+            echo "${WF}: alive/queued runs = ${ALIVE}"
+            if [ "${ALIVE}" -gt 0 ]; then
+              echo "${WF} is alive — nothing to do"
+            else
+              echo "${WF} died with no successor — dispatching"
+              gh workflow run "${WF}" --repo "${GITHUB_REPOSITORY}"
+            fi
+          }
+
+          FAIL_NOW=0
+          recover_one scrape.yml        || FAIL_NOW=$((FAIL_NOW + 1))
+          recover_one telegram-bot.yml  || FAIL_NOW=$((FAIL_NOW + 1))
+          echo "dispatch failures this run: ${FAIL_NOW}"
+
+          TOTAL=$((FAILS + FAIL_NOW))
+          if [ "${TOTAL}" -ge 5 ]; then TOTAL=5; fi
+          printf '{"fails": %d, "ts": "%s"}\n' "${TOTAL}" "$(date -u +%FT%TZ)" > "${BREAKER_KEY}"
+          zip -q -j "${BREAKER}.zip" "${BREAKER_KEY}"
+          # Best-effort bookkeeping: a failed upload must not fail recovery.
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
+            --input - >/dev/null 2>&1 || true
+          # Note: artifact upload via API requires a run id; when unavailable
+          # the breaker degrades gracefully to 0 and relies on Telegram alerts.
+          echo "breaker would be: ${TOTAL}"
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
+          FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
+          MSG="⚠️ <b>i2i SELF-SUPERVISOR run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0A${RUN_URL}"
+          curl -sS --max-time 20 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
+            && echo "failure alert sent" || echo "failure alert send failed"

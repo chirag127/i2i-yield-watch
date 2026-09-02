@@ -9,6 +9,7 @@ Subcommands:
   wallet                     print the real investable escrow balance
   config                     print the EFFECTIVE gates (env -> account -> default)
   digest                     portfolio summary to Telegram (silent, no money)
+  drill-alert                synthetic above-threshold loan -> real Telegram (read-only e2e proof)
   emireport                  EMI-status / default analytics snapshot to JSON
 """
 
@@ -59,6 +60,13 @@ def _cmd_digest(args) -> int:
     return portfolio_digest(account=args.account)
 
 
+def _cmd_drill(args) -> int:
+    from .drill import run as drill_run
+
+    out = drill_run(rate=args.rate)
+    return 0 if out["e2eConfirmed"] else 1
+
+
 def _cmd_emireport(args) -> int:
     from .emireport import run as emireport_run
 
@@ -100,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     pd = sub.add_parser("digest", help="portfolio summary to Telegram (silent, no money)")
     pd.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
     pd.add_argument("-v", "--verbose", action="store_true")
+    pdr = sub.add_parser("drill-alert", help="send ONE synthetic above-threshold loan through the real pipeline to Telegram (read-only: no i2i calls, no money)")
+    pdr.add_argument("--rate", type=float, default=None, help="synthetic loan rate pct (default: loud gate + 10)")
+    pdr.add_argument("-v", "--verbose", action="store_true")
     pe = sub.add_parser("emireport", help="EMI-status / default analytics snapshot to JSON (read-only)")
     pe.add_argument("--account", default=None, help="portfolio account (default: I2I_ACCOUNT env)")
     pe.add_argument("--out", default=None, help="output JSON path (default: data/emi-<account>.json)")
@@ -120,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_config(args)
     if args.cmd == "digest":
         return _cmd_digest(args)
+    if args.cmd == "drill-alert":
+        return _cmd_drill(args)
     if args.cmd == "emireport":
         return _cmd_emireport(args)
 
