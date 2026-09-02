@@ -1,0 +1,90 @@
+name: i2i Cancel Fundings (reverse escrow)
+
+# Reverse one or more i2iFunding fundings back into the escrow account.
+# LIVE BY DESIGN: this workflow exists to actually undo placements — the
+# cancel action is `--live` (a dry-run cancel would be a no-op workflow).
+#
+# dispatch inputs:
+#   loan_ids   space-separated loanIds (e.g. "1486852 1483929")
+#   account    chirag (default) or neeru — namespaced creds are selected by
+#              I2I_ACCOUNT; both secret sets are passed so either works.
+#
+# Reversal is confirmed by i2i's own response: {"status":"Success",
+# "message":"Funding reversed successfully"} — the workflow's application log
+# prints "OK cancelled loan <id>" per reversal and a Telegram summary fires.
+
+on:
+  workflow_dispatch:
+    inputs:
+      loan_ids:
+        description: 'Space-separated loanIds to reverse'
+        required: true
+      account:
+        description: 'Account to cancel for (chirag | neeru)'
+        required: false
+        default: 'chirag'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cancel-fundings
+  cancel-in-progress: false
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Setup toolchain (cached venv)
+        uses: ./.github/actions/setup-i2i
+        with:
+          extras: dev
+
+      - name: Cancel funding(s) (LIVE) — reverses escrow
+        env:
+          PYTHONIOENCODING: utf-8
+          I2I_ACCOUNT: ${{ github.event.inputs.account }}
+          # BOTH accounts' creds are passed; accounts.env_key resolves
+          # I2I_<ACCOUNT>_<BASE> (chirag keeps the legacy unprefixed names).
+          I2I_EMAIL: ${{ secrets.I2I_EMAIL }}
+          I2I_PASSWORD: ${{ secrets.I2I_PASSWORD }}
+          I2I_TXN_PIN: ${{ secrets.I2I_TXN_PIN }}
+          I2I_CSRF_TOKEN: ${{ secrets.I2I_CSRF_TOKEN }}
+          I2I_SESSION_ID: ${{ secrets.I2I_SESSION_ID }}
+          I2I_NEERU_EMAIL: ${{ secrets.I2I_NEERU_EMAIL }}
+          I2I_NEERU_PASSWORD: ${{ secrets.I2I_NEERU_PASSWORD }}
+          I2I_NEERU_TXN_PIN: ${{ secrets.I2I_NEERU_TXN_PIN }}
+          I2I_NEERU_CSRF_TOKEN: ${{ secrets.I2I_NEERU_CSRF_TOKEN }}
+          I2I_NEERU_SESSION_ID: ${{ secrets.I2I_NEERU_SESSION_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          .venv-ci/bin/python -m i2i_watch cancel ${{ github.event.inputs.loan_ids }} \
+            --live --account "${{ github.event.inputs.account }}" -v
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
+          FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
+          MSG="❌ <b>i2i CANCEL FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0A${RUN_URL}"
+          curl -sS --max-time 20 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
+            && echo "failure alert sent" || echo "failure alert send failed"
