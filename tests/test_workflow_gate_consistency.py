@@ -84,6 +84,10 @@ def test_scraper_is_continuously_alive_with_tick_pinger():
     assert "gh workflow run scrape.yml" in scrape_wf     # self-handoff
     assert "SCRAPE_HANDOFF_MIN" in scrape_wf
     assert "SCRAPE_STATE_PUSH_S" in scrape_wf           # periodic state pushes
+    # A scraper crash must not be masked as rc=0: the failure alert only fires
+    # if the job fails, so the true exit code must survive the `wait`.
+    assert 'if wait "$SCRAPE_PID" 2>/dev/null; then' in scrape_wf
+    assert "SCRAPE_RC=$?" in scrape_wf
 
     tick = _text("tick.yml")
     assert "gh workflow run scrape.yml" in tick          # pinger dispatches scraper

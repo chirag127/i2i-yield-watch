@@ -206,6 +206,26 @@ def test_loud_tier_does_not_respam_existing_high_loan(json_backend, capture_noti
     assert len(sent_loud) == 1  # alerted only on the first appearance
 
 
+def test_failed_loud_alert_retries_next_poll(json_backend, capture_notify, monkeypatch):
+    """A transient loud-tier delivery failure must not consume the high loan."""
+    attempts = []
+
+    def fake_send_text(text, silent=False):
+        if not silent:
+            attempts.append(text)
+            return len(attempts) > 1
+        return True
+
+    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
+    pipeline.run(raw_rows=[_loan("10", 120)])
+    assert len(attempts) == 1
+    assert storage.load_notify_state().get("highIds", []) == []
+
+    pipeline.run(raw_rows=[_loan("10", 120)])
+    assert len(attempts) == 2
+    assert storage.load_notify_state()["highIds"] == ["10"]
+
+
 def test_loud_tier_high_gate_from_env(json_backend, capture_notify, monkeypatch):
     monkeypatch.setenv("NOTIFY_HIGH_RATE_PCT", "150")
     sent_loud = []

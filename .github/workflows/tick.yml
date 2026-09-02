@@ -13,7 +13,7 @@ name: i2i Tick Pinger
 
 on:
   schedule:
-    - cron: '8,23,38,53 * * * *'   # 5-min floor; offset from :03/:18/:33/:48
+    - cron: '*/5 * * * *'          # every 5 min — GitHub's minimum cron cadence (crash recovery only; live detection is the 30s scraper)
   workflow_dispatch:
   repository_dispatch:
     types: [tick]

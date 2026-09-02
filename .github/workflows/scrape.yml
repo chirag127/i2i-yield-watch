@@ -178,8 +178,13 @@ jobs:
 
             sleep 5
           done
-          wait "$SCRAPE_PID" 2>/dev/null || true
-          SCRAPE_RC=$?
+          # Capture the real exit code: `wait ... || true` would mask a
+          # scraper crash as rc=0 and suppress the failure alert.
+          if wait "$SCRAPE_PID" 2>/dev/null; then
+            SCRAPE_RC=0
+          else
+            SCRAPE_RC=$?
+          fi
           echo "scraper exited on its own (t=$(( $(date +%s) - START ))s, rc=${SCRAPE_RC})"
           # Final flush: push any uncommitted state.
           git add data/active-loans.json data/notifications-sent.json \

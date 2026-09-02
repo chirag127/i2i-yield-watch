@@ -430,17 +430,19 @@ def run(raw_rows: list[dict] | None = None, client=None) -> dict:
         "errors": [],
         "notificationsSent": results,
     }
-    # Persist the loud tier's state so a re-posted >100% loan re-alerts, while a
-    # loan that is ALREADY in highIds stays silent (no re-spam every run). Runs
-    # AFTER the standard-tier saves (which don't know highIds) and merges the
-    # loud tier in without disturbing qualifyingIds/notifiedAt.
+    # Persist only high-tier loans whose loud alert was delivered. If delivery
+    # fails, leave the loan out of highIds so the next poll retries it instead
+    # of permanently suppressing the alert after one transient Telegram error.
     if high_ids or high_sent:
         try:
             cur = storage.load_notify_state()
-            if sorted(high_ids) != sorted(cur.get("highIds", [])):
+            delivered_high_ids = high_ids - new_high_ids if new_high_ids else high_ids
+            if high_sent:
+                delivered_high_ids = high_ids
+            if sorted(delivered_high_ids) != sorted(cur.get("highIds", [])):
                 storage.save_notify_state(
                     sorted(qual_ids), notified_at=cur.get("notifiedAt"),
-                    high_ids=sorted(high_ids),
+                    high_ids=sorted(delivered_high_ids),
                 )
         except Exception as e:  # noqa: BLE001
             log.warning("could not persist loud-tier state: %s", e)
