@@ -1,39 +1,5 @@
 [
   {
-    "runId": "run_1793017479064",
-    "startedAt": "2026-10-26T12:24:39.064440Z",
-    "completedAt": "2026-10-26T12:24:50.627690Z",
-    "loansFound": 29,
-    "newLoans": 0,
-    "loansArchived": 0,
-    "qualifyingLoans": 7,
-    "newQualifyingLoans": 0,
-    "droppedQualifyingLoans": 0,
-    "loudTierLoans": 0,
-    "loudTierSent": false,
-    "bucketChanged": false,
-    "bucketSent": false,
-    "bucketCounts": {
-      "0-10": 0,
-      "10-18": 20,
-      "18-24": 2,
-      "24-30": 0,
-      "30-40": 0,
-      "40-50": 0,
-      "50-70": 7,
-      "70-100": 0,
-      "100+": 0
-    },
-    "rateThreshold": 34.99,
-    "highRateThreshold": 100.0,
-    "errors": [],
-    "notificationsSent": {
-      "telegram": false,
-      "ntfy": false
-    },
-    "updatedAt": "2026-10-26T12:24:50.628768Z"
-  },
-  {
     "runId": "run_1793017520633",
     "startedAt": "2026-10-26T12:25:20.633831Z",
     "completedAt": "2026-10-26T12:25:31.079167Z",
@@ -6798,5 +6764,39 @@
       "ntfy": false
     },
     "updatedAt": "2026-10-26T14:38:13.122938Z"
+  },
+  {
+    "runId": "run_1793025523127",
+    "startedAt": "2026-10-26T14:38:43.127861Z",
+    "completedAt": "2026-10-26T14:38:50.918416Z",
+    "loansFound": 17,
+    "newLoans": 0,
+    "loansArchived": 0,
+    "qualifyingLoans": 0,
+    "newQualifyingLoans": 0,
+    "droppedQualifyingLoans": 0,
+    "loudTierLoans": 0,
+    "loudTierSent": false,
+    "bucketChanged": false,
+    "bucketSent": false,
+    "bucketCounts": {
+      "0-10": 0,
+      "10-18": 14,
+      "18-24": 3,
+      "24-30": 0,
+      "30-40": 0,
+      "40-50": 0,
+      "50-70": 0,
+      "70-100": 0,
+      "100+": 0
+    },
+    "rateThreshold": 34.99,
+    "highRateThreshold": 100.0,
+    "errors": [],
+    "notificationsSent": {
+      "telegram": false,
+      "ntfy": false
+    },
+    "updatedAt": "2026-10-26T14:38:50.919396Z"
   }
 ]
