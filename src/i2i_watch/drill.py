@@ -68,7 +68,6 @@ def run(rate: float | None = None) -> dict:
         "rate": rate,
         "detailedAlertSent": bool(summary["notificationsSent"].get("telegram")),
         "loudAlertSent": bool(summary.get("loudTierSent")),
-        "bucketSummarySent": bool(summary.get("bucketSent")),
         "storageDir": str(tmp),
         "e2eConfirmed": bool(summary.get("loudTierSent"))
         and bool(summary["notificationsSent"].get("telegram")),

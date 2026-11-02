@@ -64,7 +64,7 @@ State is stored as JSON files in `data/`, committed back to `main` after every C
 | File | Contents |
 |------|----------|
 | `data/active-loans.json` | Current active loan list (array) |
-| `data/notify-state.json` | Last detailed, loud-tier, and silent-bucket notification state |
+| `data/notify-state.json` | Last detailed and loud-tier notification state |
 | `data/stats.json` | Aggregate counters (avgRate, highPriorityCount, …) |
 | `data/runs.json` | Last 200 run summaries |
 | `data/notifications-sent.json` | All-time notified loan IDs (dedup) |
@@ -78,7 +78,6 @@ Set `I2I_STORAGE=firebase` to re-enable Firestore (requires `FIREBASE_SA_JSON` s
 Single Telegram bot `oriz127_bot`. Notify logic:
 
 - **NEW loans only** — a loan is announced once, the first time it appears AND its rate exceeds `NOTIFY_MIN_RATE_PCT` (default 40%). Loan IDs are persisted in `data/notify-state.json`; the set never re-notifies an already-seen ID.
-- **Silent bucket summary** — loans above 30% are grouped into `30–40`, `40–50`, `50–70`, `70–100`, and `100+` buckets. A quiet Telegram summary is sent only when a bucket's membership/count changes; links are included only for loans newly entering a bucket.
 - **LOUD tier** — any loan with rate **> `NOTIFY_HIGH_RATE_PCT`** (default 100) fires an immediate loud alert the moment it appears (or crosses the threshold), independent of the standard change-only tier — so a fresh >100% auto-invest candidate never goes unnoticed.
 - **Qualifying-set change** — if the set of loans above the threshold changes (any loan added or dropped), a summary fires.
 - **Periodic digest** — if `I2I_DIGEST_HOURS` is set, a full digest fires that often regardless of change.
@@ -198,7 +197,6 @@ gets first pick of every qualifying loan. Both accounts gate at **>100%**
 |----------|---------|-------------|
 | `I2I_STORAGE` | `json` | `json` (git-as-DB) or `firebase` (Firestore) |
 | `NOTIFY_MIN_RATE_PCT` | `40` | **Detailed notify gate** — Telegram alert on loans with rate **>** this |
-| `NOTIFY_BUCKET_MIN_RATE_PCT` | `30` | **Silent bucket gate** — bucket counts/links for loans with rate **>** this |
 | `NOTIFY_HIGH_RATE_PCT` | `100` | **LOUD alert gate** — fires the moment a loan exceeds this (auto-invest candidate), even if the standard set is unchanged |
 | `I2I_DIGEST_HOURS` | unset | Re-send the qualifying set every N hours even when unchanged (so a stable market never goes silent) |
 | `AUTOINVEST_MIN_RATE_PCT` | `100` | **Auto-invest gate** — place real money only on rate **>** this |

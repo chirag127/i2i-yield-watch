@@ -17,7 +17,6 @@ from .notify.channels import notify_all, send_telegram_text, was_any_channel_suc
 from .sources.i2i import fetch_all_loans
 from .transform import transform_loans
 from .scorer import sort_loans
-from .util import inr
 
 log = logging.getLogger("i2i_watch")
 
@@ -64,12 +63,6 @@ def _high_rate_threshold() -> float:
     return C._f("NOTIFY_HIGH_RATE_PCT", C.NOTIFY_HIGH_RATE_PCT)
 
 
-def _bucket_min_threshold() -> float:
-    """Silent bucket gate, re-read so runtime env overrides behave like the
-    detailed and loud notification gates."""
-    return C._f("NOTIFY_BUCKET_MIN_RATE_PCT", C.NOTIFY_BUCKET_MIN_RATE_PCT)
-
-
 def _digest_hours() -> float:
     """Notify at least once per N hours even when the qualifying set is
     unchanged. 0/unset = disabled (change-only). Accepts I2I_DIGEST_HOURS, or
@@ -96,115 +89,6 @@ def _digest_due(prev_notified_at: str | None, hours: float) -> bool:
     except ValueError:
         return True
     return datetime.now(timezone.utc) - prev >= timedelta(hours=hours)
-
-
-def _bucket_snapshot(active: list[dict]) -> dict[str, list[str]]:
-    """Return stable rate-notification buckets keyed by loan IDs.
-    When NOTIFY_BUCKET_MIN_RATE_PCT is 0 (the default), ALL active loans are
-    bucketed — this gives a full market view rather than only >30% loans.
-    When set to a positive value, loans at or below that rate are excluded.
-    """
-    min_rate = _bucket_min_threshold()
-    snapshot = {name: [] for name, _low, _high in C.NOTIFY_BUCKETS}
-    for loan in active:
-        rate = loan.get("interestRate")
-        if rate is None or rate <= min_rate:
-            continue
-        for index, (name, low, high) in enumerate(C.NOTIFY_BUCKETS):
-            lower_match = rate > low if index == 0 else rate >= low
-            if lower_match and (high is None or rate < high):
-                snapshot[name].append(str(loan["loanId"]))
-                break
-    return {name: sorted(ids) for name, ids in snapshot.items()}
-
-
-def _bucket_stats(loans: list[dict]) -> dict:
-    """Compute aggregate stats for a list of loans: count, total amount left,
-    average rate, average credit score, and risk-category distribution."""
-    n = len(loans)
-    if n == 0:
-        return {"count": 0, "totalLeft": 0, "avgRate": None, "avgCredit": None,
-                "risks": {}}
-    rates = [l.get("interestRate") for l in loans if l.get("interestRate") is not None]
-    credits = [l.get("creditScoreNumeric") for l in loans
-               if l.get("creditScoreNumeric") is not None]
-    total_left = sum(l.get("amountLeft") or 0 for l in loans)
-    risks: dict[str, int] = {}
-    for l in loans:
-        rc = l.get("riskCategory")
-        key = rc if rc else "Unrated"
-        risks[key] = risks.get(key, 0) + 1
-    return {
-        "count": n,
-        "totalLeft": round(total_left, 2),
-        "avgRate": round(sum(rates) / len(rates), 2) if rates else None,
-        "avgCredit": round(sum(credits) / len(credits), 1) if credits else None,
-        "risks": dict(sorted(risks.items(), key=lambda x: -x[1])),
-    }
-
-
-def _bucket_message(active: list[dict], current: dict[str, list[str]],
-                    previous: dict[str, list[str]]) -> str:
-    """Build a silent bucket summary with per-bucket totals, averages, and a
-    market-wide footer. Links are shown only for newly entering loans."""
-    by_id = {str(loan["loanId"]): loan for loan in active}
-    lines = ["📊 <b>LOAN RATE BUCKET SUMMARY (ALL RATES)</b>"]
-    lines.append("")  # blank line after header
-
-    # ── per-bucket stats ──
-    any_nonzero = False
-    for name, _low, _high in C.NOTIFY_BUCKETS:
-        ids = current.get(name, [])
-        bucket_loans = [by_id[lid] for lid in ids if lid in by_id]
-        st = _bucket_stats(bucket_loans)
-        if st["count"] == 0:
-            lines.append(f"• <b>{name}%</b>: 0 loans")
-            continue
-        any_nonzero = True
-        total_str = inr(st["totalLeft"]) or "₹0"
-        avg_r = f"{st['avgRate']:.1f}%" if st["avgRate"] is not None else "—"
-        avg_c = f"{st['avgCredit']:.0f}" if st["avgCredit"] is not None else "—"
-        lines.append(
-            f"• <b>{name}%</b>: {st['count']} loan(s) | "
-            f"Amount left: {total_str} | Avg rate: {avg_r} | Avg credit: {avg_c}"
-        )
-        # Show risk breakdown if more than one category
-        if len(st["risks"]) > 1:
-            risk_str = ", ".join(f"{k}:{v}" for k, v in st["risks"].items())
-            lines.append(f"    Risk: {risk_str}")
-        # Links only for newly entering loans
-        entered = [lid for lid in ids if lid not in set(previous.get(name, []))]
-        for loan in sort_loans([by_id[lid] for lid in entered if lid in by_id]):
-            lid = str(loan["loanId"])
-            rate = loan.get("interestRate")
-            amt = inr(loan.get("amountLeft")) or "?"
-            url = loan.get("loanUrl") or ""
-            label = f"Loan {lid}"
-            if url:
-                label = f'<a href="{escape(url, quote=True)}">{label}</a>'
-            credit = loan.get("creditScore") or "No Score"
-            lines.append(
-                f"    ↳ {label} — {rate:.2f}% | {amt} left | {credit}"
-            )
-
-    # ── market-wide summary footer ──
-    all_stats = _bucket_stats(active)
-    lines.append("")
-    lines.append("<b>── MARKET OVERVIEW ──</b>")
-    total_str = inr(all_stats["totalLeft"]) or "₹0"
-    avg_r = f"{all_stats['avgRate']:.1f}%" if all_stats["avgRate"] is not None else "—"
-    avg_c = f"{all_stats['avgCredit']:.0f}" if all_stats["avgCredit"] is not None else "—"
-    lines.append(
-        f"Active: {all_stats['count']} loans | Total left: {total_str} | "
-        f"Avg rate: {avg_r} | Avg credit: {avg_c}"
-    )
-    if all_stats["risks"]:
-        risk_str = ", ".join(f"{k}:{v}" for k, v in all_stats["risks"].items())
-        lines.append(f"Risk: {risk_str}")
-
-    lines.append("")
-    lines.append("<i>Silent update: links only for loans newly entering a bucket.</i>")
-    return "\n".join(lines)
 
 
 def run(raw_rows: list[dict] | None = None, client=None) -> dict:
@@ -253,35 +137,6 @@ def run(raw_rows: list[dict] | None = None, client=None) -> dict:
     qual_ids = {str(ln["loanId"]) for ln in qualifying}
 
     prev_state = storage.load_notify_state()
-
-    # Silent bucket tier — full market rate coverage across all active loans.
-    # State advances only after Telegram delivery, so a transient outage
-    # retries the same change on the next scrape.
-    bucket_snapshot = _bucket_snapshot(active)
-    previous_buckets = {
-        str(name): sorted({str(x) for x in ids})
-        for name, ids in (prev_state.get("buckets", {}) or {}).items()
-    }
-    bucket_changed = bucket_snapshot != previous_buckets
-    bucket_sent = False
-    if bucket_changed:
-        try:
-            bucket_sent = send_telegram_text(
-                _bucket_message(active, bucket_snapshot, previous_buckets),
-                silent=True,
-            )
-            log.info("bucket summary (%d loans >%g%%): %s",
-                     sum(len(ids) for ids in bucket_snapshot.values()),
-                     _bucket_min_threshold(),
-                     "sent" if bucket_sent else "FAILED")
-        except Exception as e:  # noqa: BLE001
-            log.warning("bucket summary failed: %s", e)
-        if bucket_sent:
-            storage.save_notify_state(
-                list(prev_state.get("qualifyingIds", [])),
-                notified_at=prev_state.get("notifiedAt"),
-                buckets=bucket_snapshot,
-            )
 
     # LOUD tier — rate > NOTIFY_HIGH_RATE_PCT (default 100). A brand-new loan in
     # this tier fires an IMMEDIATE loud Telegram alert even when the standard
@@ -422,9 +277,6 @@ def run(raw_rows: list[dict] | None = None, client=None) -> dict:
         "droppedQualifyingLoans": len(dropped_ids),
         "loudTierLoans": len(high),
         "loudTierSent": high_sent,
-        "bucketChanged": bucket_changed,
-        "bucketSent": bucket_sent,
-        "bucketCounts": {name: len(ids) for name, ids in bucket_snapshot.items()},
         "rateThreshold": threshold,
         "highRateThreshold": high_threshold,
         "errors": [],
@@ -460,7 +312,7 @@ def run(raw_rows: list[dict] | None = None, client=None) -> dict:
 
     log.info(
         "run complete: active=%d new=%d archived=%d qualifying=%d newQ=%d droppedQ=%d "
-        "loud=%d loudSent=%s buckets=%s bucketSent=%s",
+        "loud=%d loudSent=%s",
         len(active),
         len(new_loans),
         archived,
@@ -469,7 +321,5 @@ def run(raw_rows: list[dict] | None = None, client=None) -> dict:
         len(dropped_ids),
         len(high),
         high_sent,
-        {name: len(ids) for name, ids in bucket_snapshot.items()},
-        bucket_sent,
     )
     return summary

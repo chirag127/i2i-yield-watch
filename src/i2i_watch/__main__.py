@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.reset_notify_state:
         from . import storage
         storage.save_notify_state(
-            [], notified_at="1970-01-01T00:00:00Z", high_ids=[], buckets={}
+            [], notified_at="1970-01-01T00:00:00Z", high_ids=[]
         )
         # FULL reset: also clear the ever-notified history so EVERY currently-
         # qualifying loan re-announces once, not just ones not in the last

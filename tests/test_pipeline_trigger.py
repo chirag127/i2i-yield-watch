@@ -242,142 +242,29 @@ def test_loud_tier_high_gate_from_env(json_backend, capture_notify, monkeypatch)
     assert len(sent_loud) == 1
 
 
-def test_bucket_boundaries_and_snapshot():
-    rows = [
-        {"loanId": "5", "interestRate": 5.0},
-        {"loanId": "10", "interestRate": 10.0},
-        {"loanId": "15", "interestRate": 15.0},
-        {"loanId": "18", "interestRate": 18.0},
-        {"loanId": "29", "interestRate": 29.0},
-        {"loanId": "30", "interestRate": 30.0},
-        {"loanId": "31", "interestRate": 30.01},
-        {"loanId": "40", "interestRate": 40.0},
-        {"loanId": "50", "interestRate": 50.0},
-        {"loanId": "70", "interestRate": 70.0},
-        {"loanId": "100", "interestRate": 100.0},
-        {"loanId": "101", "interestRate": 100.01},
-    ]
-    snapshot = pipeline._bucket_snapshot(rows)
-    assert snapshot["0-10"] == ["5"]
-    assert snapshot["10-18"] == ["10", "15"]
-    assert snapshot["18-24"] == ["18"]
-    assert snapshot["24-30"] == ["29"]
-    assert snapshot["30-40"] == ["30", "31"]
-    assert snapshot["40-50"] == ["40"]
-    assert snapshot["50-70"] == ["50"]
-    assert snapshot["70-100"] == ["70"]
-    assert snapshot["100+"] == ["100", "101"]
-
-
-def test_bucket_summary_is_silent_change_only_and_has_new_links(
-        json_backend, capture_notify, monkeypatch):
-    bucket_messages = []
+def test_no_bucket_summary_is_ever_sent(json_backend, capture_notify, monkeypatch):
+    """The silent loan-rate bucket summary was removed: a changing market must
+    never produce a quiet Telegram push, only the loud tier and standard alerts."""
+    silent_messages = []
 
     def fake_send_text(text, silent=False):
         if silent:
-            bucket_messages.append(text)
+            silent_messages.append(text)
         return True
 
     monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
-    first = _loan("30", 30.01)
-    first["pl_user_id"] = "88030"
-    pipeline.run(raw_rows=[first])
-    assert len(bucket_messages) == 1
-    assert "30-40" in bucket_messages[0]
-    assert "88030/30" in bucket_messages[0]
-
-    pipeline.run(raw_rows=[first])
-    assert len(bucket_messages) == 1
-
-    second = _loan("40", 40.0)
-    second["pl_user_id"] = "88040"
-    pipeline.run(raw_rows=[first, second])
-    assert len(bucket_messages) == 2
-    assert "88040/40" in bucket_messages[-1]
-    assert "88030/30" not in bucket_messages[-1]
-
-
-def test_bucket_summary_includes_low_rate_loans(json_backend, capture_notify, monkeypatch):
-    """Loans below 30% must appear in the all-rate bucket summary."""
-    bucket_messages = []
-
-    def fake_send_text(text, silent=False):
-        if silent:
-            bucket_messages.append(text)
-        return True
-
-    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
-    low = _loan("low1", 15.0)
-    low["pl_user_id"] = "12001"
-    pipeline.run(raw_rows=[low])
-    assert len(bucket_messages) == 1
-    assert "10-18" in bucket_messages[0]
-    assert "12001" in bucket_messages[0]
-    assert "ALL RATES" in bucket_messages[0]
-
-    mid = _loan("mid1", 25.0)
-    mid["pl_user_id"] = "12002"
-    pipeline.run(raw_rows=[low, mid])
-    assert len(bucket_messages) == 2
-    assert "18-24" in bucket_messages[-1] or "24-30" in bucket_messages[-1]
-    assert "12002" in bucket_messages[-1]
-
-
-def test_bucket_message_includes_totals_and_averages(json_backend, capture_notify, monkeypatch):
-    """Bucket messages must include per-bucket amount left, avg rate, avg credit,
-    and a market-wide summary footer."""
-    bucket_messages = []
-
-    def fake_send_text(text, silent=False):
-        if silent:
-            bucket_messages.append(text)
-        return True
-
-    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
-    # Two loans: one at 50% (₹20k left) and one at 35% (₹20k left), both credit 742
-    pipeline.run(raw_rows=[_loan("a", 50.0), _loan("b", 35.0)])
-    msg = bucket_messages[0]
-    # Per-bucket stats present
-    assert "Amount left" in msg
-    assert "Avg rate" in msg
-    assert "Avg credit" in msg
-    # Market overview footer
-    assert "MARKET OVERVIEW" in msg
-    assert "Active: 2" in msg
-    # Total left should be sum of two ₹20,000 = ₹40,000
-    assert "40,000" in msg
-    # Avg rate = (50 + 35) / 2 = 42.5%
-    assert "42.5%" in msg
-    # Avg credit = 742
-    assert "742" in msg
-
-
-def test_bucket_summary_retries_after_failed_delivery(json_backend, capture_notify, monkeypatch):
-    attempts = []
-
-    def fake_send_text(_text, silent=False):
-        if silent:
-            attempts.append(1)
-            return len(attempts) > 1
-        return True
-
-    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
-    loan = _loan("31", 31)
-    pipeline.run(raw_rows=[loan])
-    assert len(attempts) == 1
-    assert storage.load_notify_state().get("buckets", {}) == {}
-    pipeline.run(raw_rows=[loan])
-    assert len(attempts) == 2
-    assert storage.load_notify_state()["buckets"]["30-40"] == ["31"]
+    pipeline.run(raw_rows=[_loan("15", 15.0)])
+    pipeline.run(raw_rows=[_loan("15", 15.0), _loan("31", 31.0)])
+    pipeline.run(raw_rows=[_loan("15", 15.0), _loan("31", 45.0)])
+    assert silent_messages == []
 
 
 def test_notify_state_merges_tiers(json_backend):
     storage.save_notify_state(["q"], notified_at="2000-01-01T00:00:00Z", high_ids=["h"])
-    storage.save_notify_state(["q2"], buckets={"30-40": ["b"]})
+    storage.save_notify_state(["q2"])
     state = storage.load_notify_state()
     assert state["qualifyingIds"] == ["q2"]
     assert state["highIds"] == ["h"]
-    assert state["buckets"] == {"30-40": ["b"]}
 
 
 def test_digest_helpers(monkeypatch):

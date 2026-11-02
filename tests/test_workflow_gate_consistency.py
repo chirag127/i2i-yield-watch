@@ -25,7 +25,7 @@ def test_scraper_notification_overrides_match_policy():
     # Deploy is now in a separate workflow file (deploy.yml).
     assert "schedule:" not in workflow
     assert "NOTIFY_MIN_RATE_PCT: ${{ vars.NOTIFY_MIN_RATE_PCT || '40' }}" in workflow
-    assert "NOTIFY_BUCKET_MIN_RATE_PCT: ${{ vars.NOTIFY_BUCKET_MIN_RATE_PCT || '0' }}" in workflow
+    assert "NOTIFY_BUCKET" not in workflow
     assert "NOTIFY_HIGH_RATE_PCT: ${{ vars.NOTIFY_HIGH_RATE_PCT || '100' }}" in workflow
     assert "I2I_DIGEST_HOURS: ${{ vars.I2I_DIGEST_HOURS || '6' }}" in workflow
     assert "STARTUP_JITTER_MS: ${{ vars.STARTUP_JITTER_MS || '2000' }}" in workflow
