@@ -1,47 +1,5 @@
 [
   {
-    "runId": "run_1794998439582",
-    "startedAt": "2026-11-18T10:40:39.582131Z",
-    "completedAt": "2026-11-18T10:40:49.808427Z",
-    "loansFound": 20,
-    "newLoans": 1,
-    "loansArchived": 0,
-    "qualifyingLoans": 0,
-    "newQualifyingLoans": 0,
-    "droppedQualifyingLoans": 0,
-    "loudTierLoans": 0,
-    "loudTierSent": false,
-    "rateThreshold": 34.99,
-    "highRateThreshold": 100.0,
-    "errors": [],
-    "notificationsSent": {
-      "telegram": false,
-      "ntfy": false
-    },
-    "updatedAt": "2026-11-18T10:40:49.809313Z"
-  },
-  {
-    "runId": "run_1794998479814",
-    "startedAt": "2026-11-18T10:41:19.814356Z",
-    "completedAt": "2026-11-18T10:41:30.621606Z",
-    "loansFound": 25,
-    "newLoans": 5,
-    "loansArchived": 0,
-    "qualifyingLoans": 0,
-    "newQualifyingLoans": 0,
-    "droppedQualifyingLoans": 0,
-    "loudTierLoans": 0,
-    "loudTierSent": false,
-    "rateThreshold": 34.99,
-    "highRateThreshold": 100.0,
-    "errors": [],
-    "notificationsSent": {
-      "telegram": false,
-      "ntfy": false
-    },
-    "updatedAt": "2026-11-18T10:41:30.622508Z"
-  },
-  {
     "runId": "run_1794998520626",
     "startedAt": "2026-11-18T10:42:00.626308Z",
     "completedAt": "2026-11-18T10:42:11.760540Z",
@@ -4198,5 +4156,47 @@
       "ntfy": false
     },
     "updatedAt": "2026-11-18T12:50:04.754893Z"
+  },
+  {
+    "runId": "run_1795006234758",
+    "startedAt": "2026-11-18T12:50:34.758796Z",
+    "completedAt": "2026-11-18T12:50:43.444514Z",
+    "loansFound": 19,
+    "newLoans": 1,
+    "loansArchived": 1,
+    "qualifyingLoans": 1,
+    "newQualifyingLoans": 1,
+    "droppedQualifyingLoans": 0,
+    "loudTierLoans": 0,
+    "loudTierSent": false,
+    "rateThreshold": 34.99,
+    "highRateThreshold": 100.0,
+    "errors": [],
+    "notificationsSent": {
+      "telegram": true,
+      "ntfy": false
+    },
+    "updatedAt": "2026-11-18T12:50:43.446216Z"
+  },
+  {
+    "runId": "run_1795006273723",
+    "startedAt": "2026-11-18T12:51:13.723123Z",
+    "completedAt": "2026-11-18T12:51:25.514214Z",
+    "loansFound": 19,
+    "newLoans": 1,
+    "loansArchived": 1,
+    "qualifyingLoans": 0,
+    "newQualifyingLoans": 0,
+    "droppedQualifyingLoans": 1,
+    "loudTierLoans": 0,
+    "loudTierSent": false,
+    "rateThreshold": 34.99,
+    "highRateThreshold": 100.0,
+    "errors": [],
+    "notificationsSent": {
+      "telegram": false,
+      "ntfy": false
+    },
+    "updatedAt": "2026-11-18T12:51:25.515050Z"
   }
 ]
