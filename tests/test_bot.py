@@ -5,11 +5,19 @@ monkeypatched transports so no network is touched.
 """
 
 import json
+import io
 import urllib.error
 
 import pytest
 
 from i2i_watch import bot
+
+
+@pytest.fixture(autouse=True)
+def _block_unmocked_transport(monkeypatch):
+    def blocked(*args, **kwargs):
+        pytest.fail("bot test reached unmocked urllib transport")
+    monkeypatch.setattr(bot.urllib.request, "urlopen", blocked)
 
 
 # ── parse_command ────────────────────────────────────────────────────────────
@@ -77,6 +85,62 @@ def test_register_commands_raises_on_http_error(monkeypatch):
     monkeypatch.setattr(bot.urllib.request, "urlopen", boom)
     with pytest.raises(RuntimeError):
         bot.register_commands("tok")
+
+
+def _telegram_call(method):
+    if method == "setMyCommands":
+        return bot.register_commands("fixture-token")
+    if method == "getUpdates":
+        return bot.get_updates("fixture-token", 1)
+    return bot.send_message("fixture-token", "fixture-chat", "fixture-message")
+
+
+@pytest.mark.parametrize("method", ["setMyCommands", "getUpdates", "sendMessage"])
+@pytest.mark.parametrize("payload", [
+    {"ok": False, "description": "fixture-private-response"},
+    {"ok": 1}, {"ok": "true"}, {}, [], None,
+])
+def test_telegram_requires_boolean_acknowledgement(monkeypatch, method, payload):
+    monkeypatch.setattr(bot.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(
+        json.dumps(payload).encode()
+    ))
+    with pytest.raises(RuntimeError) as error:
+        _telegram_call(method)
+    assert method in str(error.value)
+    assert "fixture-private-response" not in str(error.value)
+
+
+@pytest.mark.parametrize("method", ["setMyCommands", "getUpdates", "sendMessage"])
+def test_telegram_accepts_boolean_acknowledgement(monkeypatch, method):
+    monkeypatch.setattr(bot.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(
+        b'{"ok": true, "result": []}'
+    ))
+    assert _telegram_call(method) == ([] if method == "getUpdates" else None)
+
+
+@pytest.mark.parametrize("method", ["setMyCommands", "getUpdates", "sendMessage"])
+@pytest.mark.parametrize("failure_kind,diagnostic", [
+    ("http", "HTTP 401"), ("network", "URLError"), ("json", "JSONDecodeError"),
+])
+def test_telegram_transport_errors_are_sanitized(monkeypatch, method, failure_kind, diagnostic):
+    def failed_transport(*args, **kwargs):
+        if failure_kind == "json":
+            return io.BytesIO(b"fixture-private-response")
+        if failure_kind == "http":
+            raise urllib.error.HTTPError(
+                "https://api.telegram.org/botfixture-token/getUpdates", 401,
+                "fixture-chat", {}, io.BytesIO(b"fixture-private-response"),
+            )
+        raise urllib.error.URLError("https://fixture-token/fixture-chat")
+    monkeypatch.setattr(bot.urllib.request, "urlopen", failed_transport)
+    with pytest.raises(RuntimeError) as error:
+        _telegram_call(method)
+    assert diagnostic in str(error.value)
+    assert method in str(error.value)
+    assert error.value.__suppress_context__
+    assert error.value.__cause__ is None
+    for sensitive in ("fixture-token", "fixture-chat", "fixture-private-response", "https://"):
+        assert sensitive not in str(error.value)
 
 
 # ── is_owner ─────────────────────────────────────────────────────────────────
@@ -207,7 +271,7 @@ def test_load_state_handles_garbage(tmp_path):
 
 # ── run_poll orchestration ───────────────────────────────────────────────────
 
-def test_run_poll_skips_non_owner_and_persists_offset(tmp_path):
+def test_run_poll_skips_non_owner_and_persists_offset(tmp_path, monkeypatch):
     state_path = str(tmp_path / "state.json")
 
     updates = [
@@ -215,14 +279,12 @@ def test_run_poll_skips_non_owner_and_persists_offset(tmp_path):
         {"update_id": 2, "message": {"chat": {"id": "123"}, "text": "/ping"}},  # owner
         {"update_id": 3, "message": {"chat": {"id": "123"}, "text": "/status"}},  # owner
     ]
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(bot, "get_updates", lambda tok, off, timeout=50, limit=10: updates)
     monkeypatch.setattr(bot, "dispatch", lambda *a: None)
     sent = []
     monkeypatch.setattr(bot, "send_message", lambda tok, cid, text: sent.append(text))
 
     acted = bot.run_poll("tok", "123", "gh", "o/r", state_path, timeout=1)
-    monkeypatch.undo()
 
     assert acted == 2  # only owner messages acted on
     assert bot.load_state(state_path) == {"last_update_id": 3}
@@ -230,11 +292,10 @@ def test_run_poll_skips_non_owner_and_persists_offset(tmp_path):
     assert "pong" in sent[0]
 
 
-def test_run_poll_offset_resumes(tmp_path):
+def test_run_poll_offset_resumes(tmp_path, monkeypatch):
     state_path = str(tmp_path / "state.json")
     bot.save_state(state_path, {"last_update_id": 5})
 
-    monkeypatch = pytest.MonkeyPatch()
     calls = {}
     def fake_get_updates(tok, off, timeout=50, limit=10):
         calls["offset"] = off
@@ -244,7 +305,6 @@ def test_run_poll_offset_resumes(tmp_path):
     monkeypatch.setattr(bot, "send_message", lambda *a: None)
 
     bot.run_poll("tok", "123", "gh", "o/r", state_path, timeout=1)
-    monkeypatch.undo()
 
     assert calls["offset"] == 6  # last_update_id+1 — never re-process old
     assert bot.load_state(state_path) == {"last_update_id": 6}
@@ -275,12 +335,94 @@ def test_run_poll_empty_updates_no_state_write(tmp_path, monkeypatch):
     assert bot.load_state(state_path) == {}
 
 
+def test_run_poll_replies_to_incoming_co_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "get_updates", lambda *a, **k: [
+        {"update_id": 1, "message": {"chat": {"id": 456}, "text": "/ping"}},
+    ])
+    replies = []
+    monkeypatch.setattr(bot, "send_message", lambda tok, cid, text: replies.append((cid, text)))
+
+    assert bot.run_poll("tok", "123,456", "gh", "o/r", str(tmp_path / "state.json")) == 1
+    assert replies == [("456", "pong 🏓")]
+
+
+def test_run_poll_does_not_replay_dispatches_after_ambiguous_failure(tmp_path, monkeypatch):
+    state_path = str(tmp_path / "state.json")
+    updates = [
+        {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/invest"}},
+        {"update_id": 2, "message": {"chat": {"id": 123}, "text": "/invest"}},
+        {"update_id": 3, "message": {"chat": {"id": 123}, "text": "/ping"}},
+    ]
+    monkeypatch.setattr(bot, "get_updates", lambda tok, off, timeout=50: [
+        u for u in updates if u["update_id"] >= off
+    ])
+    attempts = []
+    def dispatch(*args):
+        attempts.append(args[1])
+        if len(attempts) == 2:
+            raise TimeoutError("response lost after server may have accepted command")
+    monkeypatch.setattr(bot, "dispatch", dispatch)
+    replies = []
+    monkeypatch.setattr(bot, "send_message", lambda tok, cid, text: replies.append(text))
+
+    bot.run_poll("tok", "123", "gh", "o/r", state_path)
+    bot.run_poll("tok", "123", "gh", "o/r", state_path)
+
+    assert attempts == ["invest.yml", "invest.yml"]
+    assert bot.load_state(state_path) == {"last_update_id": 3}
+    assert any("not confirmed" in reply.lower() for reply in replies)
+    assert replies[-1] == "pong 🏓"
+
+
+def test_run_poll_checkpoints_before_external_dispatch(tmp_path, monkeypatch):
+    state_path = str(tmp_path / "state.json")
+    monkeypatch.setattr(bot, "get_updates", lambda *a, **k: [
+        {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/invest"}},
+    ])
+    def dispatch(*args):
+        assert bot.load_state(state_path) == {"last_update_id": 1}
+        raise KeyboardInterrupt("simulate interruption after remote acceptance")
+    monkeypatch.setattr(bot, "dispatch", dispatch)
+    with pytest.raises(KeyboardInterrupt):
+        bot.run_poll("tok", "123", "gh", "o/r", state_path)
+    assert bot.load_state(state_path) == {"last_update_id": 1}
+
+
+def test_run_poll_checkpoint_failure_prevents_dispatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "get_updates", lambda *a, **k: [
+        {"update_id": 1, "message": {"chat": {"id": 123}, "text": "/invest"}},
+    ])
+    def unavailable(*args):
+        raise OSError("disk unavailable")
+    monkeypatch.setattr(bot, "save_state", unavailable)
+    attempts = []
+    monkeypatch.setattr(bot, "dispatch", lambda *a: attempts.append(a))
+    monkeypatch.setattr(bot, "send_message", lambda *a: None)
+    with pytest.raises(OSError):
+        bot.run_poll("tok", "123", "gh", "o/r", str(tmp_path / "state.json"))
+    assert attempts == []
+
+
+def test_save_state_failed_replace_keeps_previous_offset(tmp_path, monkeypatch):
+    state_path = str(tmp_path / "state.json")
+    bot.save_state(state_path, {"last_update_id": 5})
+    def unavailable(*args):
+        raise OSError("replace unavailable")
+    monkeypatch.setattr(bot.os, "replace", unavailable)
+    with pytest.raises(OSError):
+        bot.save_state(state_path, {"last_update_id": 6})
+    assert bot.load_state(state_path) == {"last_update_id": 5}
+    assert list(tmp_path.iterdir()) == [tmp_path / "state.json"]
+
+
 # ── main(): all-polls-failed must exit non-zero (loud CI failure) ───────────
 
 def test_main_exit_nonzero_when_all_polls_fail(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("network down")
     monkeypatch.setattr(bot, "get_updates", boom)
+    monkeypatch.setattr(bot, "register_commands", lambda tok: None)
+    monkeypatch.setattr(bot.time, "sleep", lambda s: None)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     monkeypatch.setenv("GITHUB_TOKEN", "g")
@@ -294,34 +436,53 @@ def test_main_exit_zero_when_unconfigured(monkeypatch):
     assert bot.main(["--iterations", "1"]) == 0
 
 
+@pytest.mark.parametrize("stage,iterations,expected_rc", [
+    ("menu", "1", 0),
+    ("poll", "1", 1),
+    ("poll", "0", 1),
+])
+def test_main_failure_diagnostics_exclude_sensitive_exception_data(
+    monkeypatch, capsys, stage, iterations, expected_rc,
+):
+    def failure(*args, **kwargs):
+        raise RuntimeError(
+            "https://api.telegram.org/botfixture-token/getUpdates "
+            "chat_id=fixture-chat body=fixture-private-message"
+        )
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fixture-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "fixture-chat")
+    monkeypatch.setattr(bot, "register_commands", failure if stage == "menu" else lambda *a: None)
+    monkeypatch.setattr(bot, "get_updates", failure if stage == "poll" else lambda *a, **k: [])
+    monkeypatch.setattr(bot.time, "sleep", lambda s: None)
+
+    assert bot.main(["--iterations", iterations, "--max-failures", "1"]) == expected_rc
+    captured = capsys.readouterr()
+    assert "RuntimeError" in captured.err
+    assert ("registration failed" if stage == "menu" else "poll 1 failed") in captured.err
+    for sensitive in ("fixture-token", "fixture-chat", "fixture-private-message", "https://"):
+        assert sensitive not in captured.out + captured.err
+
+
 # ── main(): continuous mode (--iterations 0, used by the live workflow) ──────
 
 def test_main_continuous_success_polls_forever(monkeypatch):
     """Continuous mode keeps polling (never exits) while polls succeed."""
-    import threading, time
     calls = []
-    monkeypatch.setattr(bot, "get_updates", lambda *a, **k: calls.append(1) or [])
+    def get_updates(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 4:
+            raise KeyboardInterrupt("stop synchronous test")
+        return []
+    monkeypatch.setattr(bot, "get_updates", get_updates)
     monkeypatch.setattr(bot, "register_commands", lambda tok: None)  # no network
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     monkeypatch.setenv("GITHUB_TOKEN", "g")
     monkeypatch.setattr(bot.time, "sleep", lambda s: None)
 
-    result = {}
-    def run():
-        result["rc"] = bot.main(["--iterations", "0", "--timeout", "1"])
-    th = threading.Thread(target=run, daemon=True)
-    th.start()
-    # Wait until we see at least 3 polls OR 2 seconds elapse (whichever
-    # comes first). This is timing-independent: we don't assert on wall-clock
-    # time, only that the bot keeps polling.
-    deadline = time.time() + 2.0
-    while len(calls) < 3 and time.time() < deadline and th.is_alive():
-        time.sleep(0.01)
-    # Must still be polling — continuous mode never exits on its own.
-    assert th.is_alive()
-    assert len(calls) >= 3  # polled repeatedly
-    # (daemon thread dies with the test process)
+    with pytest.raises(KeyboardInterrupt, match="stop synchronous test"):
+        bot.main(["--iterations", "0", "--timeout", "1"])
+    assert len(calls) == 4
 
 
 def test_main_continuous_exits_1_after_max_consecutive_failures(monkeypatch):
@@ -329,6 +490,7 @@ def test_main_continuous_exits_1_after_max_consecutive_failures(monkeypatch):
         raise RuntimeError("network down")
     monkeypatch.setattr(bot, "get_updates", boom)
     monkeypatch.setattr(bot, "register_commands", lambda tok: None)  # no network
+    monkeypatch.setattr(bot.time, "sleep", lambda s: None)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     monkeypatch.setenv("GITHUB_TOKEN", "g")
@@ -339,11 +501,12 @@ def test_main_continuous_exits_1_after_max_consecutive_failures(monkeypatch):
 
 def test_main_continuous_recovers_after_transient_failure(monkeypatch):
     """A single failure between successes must NOT trip the max-failures exit."""
-    import threading, time
     calls = {"n": 0}
     def flaky(*a, **k):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] == 7:
+            raise KeyboardInterrupt("stop synchronous test")
+        if calls["n"] in (1, 2, 4, 5):
             raise RuntimeError("transient")
         return []
     monkeypatch.setattr(bot, "get_updates", flaky)
@@ -353,21 +516,6 @@ def test_main_continuous_recovers_after_transient_failure(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "g")
     monkeypatch.setattr(bot.time, "sleep", lambda s: None)
 
-    result = {}
-    def run():
-        result["rc"] = bot.main(["--iterations", "0", "--timeout", "1", "--max-failures", "3"])
-    th = threading.Thread(target=run, daemon=True)
-    th.start()
-    # Wait until at least 1 poll completed OR 2 seconds elapse.
-    deadline = time.time() + 2.0
-    while calls["n"] < 1 and time.time() < deadline and th.is_alive():
-        time.sleep(0.01)
-    assert th.is_alive()  # still polling after failure #1 + successes
-    monkeypatch.setattr(bot, "get_updates", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("kill")))
-    for _ in range(30):
-        if not th.is_alive():
-            break
-        time.sleep(0.05)
-    # It survived the transient failure, so it needed 3 consecutive failures
-    # to exit — meaning it must NOT have exited at 1.
-    assert result.get("rc") != 1
+    with pytest.raises(KeyboardInterrupt, match="stop synchronous test"):
+        bot.main(["--iterations", "0", "--timeout", "1", "--max-failures", "3"])
+    assert calls["n"] == 7

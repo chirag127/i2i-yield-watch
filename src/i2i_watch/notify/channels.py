@@ -7,8 +7,11 @@ followed by label-free info lines. Messages chunk to Telegram's 4096 limit.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
+from html import escape
+from html.parser import HTMLParser
 
 import httpx
 
@@ -22,8 +25,17 @@ DEFAULT_NTFY_BASE = "https://ntfy.sh"
 TELEGRAM_RETRY_MAX_S = 30.0
 
 
+class _TelegramRequestLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # HTTPX INFO includes the bot token in its request URL, even on success.
+        return "api.telegram.org/bot" not in record.getMessage().lower()
+
+
+logging.getLogger("httpx").addFilter(_TelegramRequestLogFilter())
+
+
 def _esc(s: object) -> str:
-    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return escape(str(s), quote=True)
 
 
 def format_loan_line(loan: dict) -> str:
@@ -53,6 +65,10 @@ def _enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def enabled_channels() -> set[str]:
+    return {name for name in ("telegram", "ntfy") if _enabled(f"{name.upper()}_ENABLED")}
+
+
 def build_header(count: int, rate_threshold: float) -> str:
     plural = "" if count == 1 else "S"
     return f"🚨 <b>{count} HIGH-YIELD LOAN{plural} (rate &gt; {rate_threshold:g}%)</b>\n\n"
@@ -61,6 +77,52 @@ def build_header(count: int, rate_threshold: float) -> str:
 def build_footer(stats: dict, dashboard_url: str) -> str:
     active = (stats or {}).get("activeCount", 0)
     return f'\n\n📊 Active: {active} | <a href="{_esc(dashboard_url)}">Dashboard</a>'
+
+
+class _ReadableHTML(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.links: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "a":
+            self.links.append(dict(attrs).get("href") or "")
+        elif tag == "br":
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self.links:
+            url = self.links.pop()
+            if url:
+                self.parts.append(f" ({url})")
+
+
+def _bounded_html(text: str) -> list[str]:
+    if len(text.encode("utf-16-le")) // 2 <= 4096:
+        return [text]
+    # Never cut an HTML tag/entity. Oversized messages retain text and link targets,
+    # sacrificing styling rather than dropping loan details or sending invalid HTML.
+    parser = _ReadableHTML()
+    parser.feed(text)
+    parser.close()
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for char in "".join(parser.parts):
+        escaped = escape(char, quote=False)
+        width = len(escaped.encode("utf-16-le")) // 2
+        if size + width > SAFE_CHUNK:
+            chunks.append("".join(current))
+            current, size = [], 0
+        current.append(escaped)
+        size += width
+    if current:
+        chunks.append("".join(current))
+    return chunks
 
 
 def chunk_messages(loans: list[dict], header: str, footer: str) -> list[str]:
@@ -88,11 +150,11 @@ def chunk_messages(loans: list[dict], header: str, footer: str) -> list[str]:
             + "\n\n<i>No loans currently meet the criteria.</i>\n"
             + footer
         )
-    return messages
+    return [chunk for message in messages for chunk in _bounded_html(message)]
 
 
 def _response_json(response: object) -> dict:
-    """Read a Telegram JSON response without making test doubles brittle."""
+    """Malformed responses never establish delivery."""
     try:
         body = response.json()
     except Exception:  # noqa: BLE001
@@ -101,13 +163,7 @@ def _response_json(response: object) -> dict:
 
 
 def _telegram_post(payload: dict) -> bool:
-    """Send one Telegram message and retry one server-requested backoff.
-
-    Telegram can return HTTP 200 with ``ok: false``. Treat that as delivery
-    failure so notification state is retried on the next scrape. A 429 response
-    may include ``parameters.retry_after``; honor it once, capped to keep a
-    broken endpoint from consuming the whole scraper job.
-    """
+    """Require explicit acknowledgement; retry only a bounded server-requested 429."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         return False
@@ -116,26 +172,32 @@ def _telegram_post(payload: dict) -> bool:
         try:
             response = httpx.post(url, json=payload, timeout=20)
             body = _response_json(response)
-            status_code = getattr(response, "status_code", 200)
+            status_code = response.status_code
             if status_code == 429 and attempt == 0:
-                retry_after = body.get("parameters", {}).get("retry_after", 0)
+                parameters = body.get("parameters")
+                retry_after = parameters.get("retry_after") if isinstance(parameters, dict) else None
                 try:
-                    delay = min(max(float(retry_after), 0.0), TELEGRAM_RETRY_MAX_S)
+                    delay = float(retry_after)
                 except (TypeError, ValueError):
-                    delay = 0.0
+                    delay = math.nan
+                if not math.isfinite(delay) or not 0 <= delay <= TELEGRAM_RETRY_MAX_S:
+                    log.warning("telegram: HTTP 429; retry deferred (backoff outside request budget)")
+                    return False
                 log.warning("telegram: rate limited; retrying in %.1fs", delay)
                 if delay:
                     time.sleep(delay)
                 continue
-            response.raise_for_status()
-            if body and body.get("ok") is False:
-                log.warning("telegram: API rejected message: %s", body.get("description", "unknown error"))
+            if not 200 <= status_code < 300:
+                log.warning("telegram: HTTP %d; message not acknowledged", status_code)
                 return False
-            return body.get("ok", True) is True
+            if body.get("ok") is not True:
+                log.warning("telegram: missing or rejected API acknowledgement")
+                return False
+            return True
         except Exception as e:  # noqa: BLE001
-            log.warning("telegram: request failed (attempt %d/2): %s", attempt + 1, e)
-            if attempt == 1:
-                return False
+            # Exception text and Telegram descriptions can contain credential-bearing URLs.
+            log.warning("telegram: request failed (%s); delivery unconfirmed", type(e).__name__)
+            return False
     return False
 
 
@@ -167,7 +229,7 @@ def send_telegram(
             log.info("telegram: chunk %d/%d sent", i + 1, len(messages))
         except Exception as e:  # noqa: BLE001
             all_ok = False
-            log.warning("telegram: chunk %d/%d failed: %s", i + 1, len(messages), e)
+            log.warning("telegram: chunk %d/%d failed (%s)", i + 1, len(messages), type(e).__name__)
         if i < len(messages) - 1:
             time.sleep(1.1)
     return all_ok
@@ -217,7 +279,8 @@ def send_ntfy(
 
 
 def notify_all(
-    loans: list[dict], stats: dict, dashboard_url: str, rate_threshold: float = 50.0
+    loans: list[dict], stats: dict, dashboard_url: str, rate_threshold: float = 50.0,
+    *, channels: set[str] | None = None,
 ) -> dict[str, bool]:
     """Dispatch to enabled channels. Telegram gated by TELEGRAM_ENABLED, ntfy by
     NTFY_ENABLED (each also no-ops without its own credentials).
@@ -226,11 +289,15 @@ def notify_all(
     if not loans:
         log.info("notify: no qualifying loans")
         return results
-    if _enabled("TELEGRAM_ENABLED"):
+    selected = enabled_channels()
+    if channels is not None:
+        selected.intersection_update(channels)
+    if "telegram" in selected:
         results["telegram"] = send_telegram(loans, stats, dashboard_url, rate_threshold)
     else:
-        log.info("notify: telegram disabled (TELEGRAM_ENABLED not truthy)")
-    results["ntfy"] = send_ntfy(loans, stats, dashboard_url, rate_threshold)
+        log.info("notify: telegram disabled or not selected")
+    if "ntfy" in selected:
+        results["ntfy"] = send_ntfy(loans, stats, dashboard_url, rate_threshold)
     log.info("notification results: %s", results)
     return results
 
@@ -240,7 +307,7 @@ def was_any_channel_successful(results: dict) -> bool:
 
 
 def send_telegram_text(text: str, silent: bool = False) -> bool:
-    """Send one pre-formatted HTML message via the fleet Telegram bot (invest /
+    """Send bounded pre-formatted HTML messages via the fleet Telegram bot (invest /
     top-up / cancel summaries build their own body). No-op if unset.
     silent=True sets disable_notification: a quiet push that still lands in the
     chat but doesn't buzz — for routine summaries. Loud (default) for actionable
@@ -250,12 +317,19 @@ def send_telegram_text(text: str, silent: bool = False) -> bool:
     if not token or not chat_id:
         log.info("telegram: TELEGRAM_BOT_TOKEN/CHAT_ID unset — skipping")
         return False
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-               "disable_web_page_preview": True}
-    if silent:
-        payload["disable_notification"] = True
     try:
-        return _telegram_post(payload)
+        messages = _bounded_html(text)
+        all_ok = bool(messages)
+        for i, message in enumerate(messages):
+            payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML",
+                       "disable_web_page_preview": True}
+            if silent:
+                payload["disable_notification"] = True
+            if not _telegram_post(payload):
+                all_ok = False
+            if i < len(messages) - 1:
+                time.sleep(1.1)
+        return all_ok
     except Exception as e:  # noqa: BLE001
-        log.warning("telegram: send_telegram_text failed: %s", e)
+        log.warning("telegram: send_telegram_text failed (%s)", type(e).__name__)
         return False

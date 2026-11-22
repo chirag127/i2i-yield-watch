@@ -4,9 +4,9 @@ REAL pipeline and prove the Telegram alert chain fires end-to-end.
 Money-safety invariants (the drill never touches real money):
   - No i2i network calls: raw rows are injected; listing endpoints and
     i2i credentials are never touched.
-  - Storage is redirected to an ephemeral temp dir; nothing is committed.
+  - Storage is redirected to a temporary dir, removed when the drill finishes.
   - The real-money invest dispatch is neutralized in-process.
-The only real side effect is the Telegram message itself, labeled [DRILL].
+The only lasting side effects are the two Telegram alerts, labeled DRILL.
 """
 
 from __future__ import annotations
@@ -51,17 +51,29 @@ def run(rate: float | None = None) -> dict:
             "— a below-gate drill proves nothing"
         )
 
-    pipeline._dispatch_invest = lambda: None  # drill: never dispatch real-money invest
-
-    tmp = Path(tempfile.mkdtemp(prefix="i2i-drill-"))
-    os.environ["I2I_STORAGE"] = "json"
-    storage._mode = None
-    storage._app = None
-    storage._db = None
-    storage._data_dir = lambda: tmp
-
     loan_id = f"DRILL{int(time.time())}"
-    summary = pipeline.run(raw_rows=[_synthetic_row(loan_id, rate)])
+    original = (pipeline._dispatch_invest, storage._data_dir,
+                storage._mode, storage._app, storage._db)
+    overrides = {"I2I_STORAGE": "json", "TELEGRAM_ENABLED": "1", "NTFY_ENABLED": "0"}
+    previous_env = {key: os.environ.get(key) for key in overrides}
+    with tempfile.TemporaryDirectory(prefix="i2i-drill-") as directory:
+        tmp = Path(directory)
+        try:
+            pipeline._dispatch_invest = lambda: None  # never dispatch real-money invest
+            os.environ.update(overrides)
+            storage._mode = None
+            storage._app = None
+            storage._db = None
+            storage._data_dir = lambda: tmp
+            summary = pipeline.run(raw_rows=[_synthetic_row(loan_id, rate)])
+        finally:
+            (pipeline._dispatch_invest, storage._data_dir,
+             storage._mode, storage._app, storage._db) = original
+            for key, value in previous_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
     out = {
         "drill": True,
         "loanId": loan_id,

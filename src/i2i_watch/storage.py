@@ -376,7 +376,9 @@ _UNSET = object()
 
 
 def save_notify_state(qualifying_ids: list[str], notified_at: str | None | object = _UNSET,
-                      high_ids: list[str] | None = None) -> None:
+                      high_ids: list[str] | None = None,
+                      channels: dict | None = None,
+                      market_thresholds: dict | None = None) -> None:
     """Persist the notification snapshot without dropping another tier.
 
     ``high_ids`` tracks the loud rate tier. Optional fields are merged with the
@@ -385,11 +387,21 @@ def save_notify_state(qualifying_ids: list[str], notified_at: str | None | objec
     """
     init()
     current = load_notify_state()
+    timestamp = _now_iso() if notified_at is _UNSET else notified_at
+    if channels is None:
+        # Legacy callers explicitly replace/reset the detailed snapshot for all channels.
+        channels = {
+            name: {"qualifyingIds": sorted(set(qualifying_ids)), "notifiedAt": timestamp}
+            for name in current.get("channels", {})
+        }
     payload = {
         "qualifyingIds": sorted({str(x) for x in qualifying_ids}),
-        "notifiedAt": _now_iso() if notified_at is _UNSET else notified_at,
+        "notifiedAt": timestamp,
         "highIds": sorted({str(x) for x in (high_ids if high_ids is not None else current.get("highIds", []))}),
+        "channels": channels,
     }
+    if market_thresholds is not None or "marketThresholds" in current:
+        payload["marketThresholds"] = market_thresholds if market_thresholds is not None else current["marketThresholds"]
     if _mode == "json":
         _write_json("notify-state.json", {**payload, "updatedAt": _now_iso()})
         return

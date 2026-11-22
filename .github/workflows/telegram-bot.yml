@@ -53,6 +53,7 @@ jobs:
       # job is checkout + python3, so it starts fast and never hits the
       # historical Playwright/apt cold-start failure.
       - name: Run Telegram command bot (continuous, self-handoff)
+        id: bot
         env:
           PYTHONIOENCODING: utf-8
           PYTHONPATH: src
@@ -115,12 +116,18 @@ jobs:
 
             sleep 5
           done
-          wait "$BOT_PID" 2>/dev/null || true
-          echo "bot exited on its own (t=$(( $(date +%s) - START ))s)"
+          if wait "$BOT_PID" 2>/dev/null; then
+            BOT_RC=0
+          else
+            BOT_RC=$?
+          fi
+          echo "bot exited on its own (t=$(( $(date +%s) - START ))s, rc=${BOT_RC})"
+          exit "$BOT_RC"
 
-      # Final flush (normal path): the periodic pushes above cover the offset
-      # continuously; this catches anything between the last push and exit.
+      # Flush even after a child crash so previously attempted commands keep
+      # their checkpoints when the supervisor restarts the bot.
       - name: Commit bot state (offset dedup — git-as-DB)
+        if: ${{ !cancelled() && (steps.bot.outcome == 'success' || steps.bot.outcome == 'failure') }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -161,17 +168,24 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set +e
-          [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "no telegram token; skip alert"; exit 0; }
+          set -o pipefail
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::error::failure alert unavailable: Telegram configuration missing"
+            exit 1
+          fi
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/tmp/gh_api_err || echo "unknown")
-          [ "$STARTED" = "unknown" ] && echo "gh api run metadata failed: $(cat /tmp/gh_api_err)"
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.created_at' 2>/dev/null || echo "unknown")
           FAIL_STEP=$(gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs \
-            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/tmp/gh_run_err || echo "unknown")
-          [ "$FAIL_STEP" = "unknown" ] && echo "gh run view failed: $(cat /tmp/gh_run_err)"
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | if length > 0 then .[0].name else "unknown" end' 2>/dev/null || echo "unknown")
           CONSEC=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${GITHUB_WORKFLOW}" --limit 10 --json conclusion \
             --jq '[.[].conclusion] | (index("success") // length) as $n | .[0:$n] | length' 2>/dev/null || echo 0)
           MSG="⚠️ <b>i2i TELEGRAM BOT run FAILED</b>%0AStarted: ${STARTED} UTC%0AFailing step: ${FAIL_STEP}%0AConsecutive failures: ${CONSEC}%0AYou can't re-trigger workflows by message until this is fixed.%0A${RUN_URL}"
-          curl -sS --max-time 20 -X POST \
+          if curl -sS --fail --max-time 20 -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" >/dev/null \
-            && echo "failure alert sent" || echo "failure alert send failed"
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML -d text="$MSG" 2>/dev/null \
+            | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("ok") is True else 1)' 2>/dev/null; then
+            echo "failure alert sent"
+          else
+            echo "::error::failure alert delivery not confirmed"
+            exit 1
+          fi

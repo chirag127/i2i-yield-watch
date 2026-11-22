@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import config as C
 from . import storage
-from .notify.channels import notify_all, send_telegram_text, was_any_channel_successful
+from .notify.channels import _enabled, notify_all, send_telegram_text
 from .sources.i2i import fetch_all_loans
 from .transform import transform_loans
 from .scorer import sort_loans
@@ -205,64 +205,61 @@ def run(raw_rows: list[dict] | None = None, client=None) -> dict:
             log.warning("loud-tier alert failed: %s", e)
 
     results = {"telegram": False, "ntfy": False}
-    should_notify = (changed and new_ids and qualifying) or (digest_due and qualifying)
-    if should_notify:
-        # New-only on a change (never re-send an already-notified loan); full
-        # set only for a periodic digest.
-        if digest_due and not (changed and new_ids):
-            to_send = qualifying
-            why = "digest"
-        else:
-            to_send = [ln for ln in qualifying if str(ln["loanId"]) in new_ids]
-            why = "change"
-        log.info(
-            "notifying %d loans (reason=%s, new=%d dropped=%d, qualifying=%d)",
-            len(to_send),
-            why,
-            len(new_ids),
-            len(dropped_ids),
-            len(qualifying),
-        )
-        dashboard_url = os.environ.get(
-            "DASHBOARD_URL", "https://chirag127.github.io/i2i-yield-watch/"
-        )
-        stats = {
-            "activeCount": len(active),
-            "qualifyingCount": len(qualifying),
-            "newQualifyingCount": len(new_ids),
-            "droppedCount": len(dropped_ids),
-            "rateThreshold": threshold,
-        }
-        results = notify_all(to_send, stats, dashboard_url, threshold)
-        if was_any_channel_successful(results):
-            storage.save_notify_state(sorted(qual_ids))
-            # Record ONLY the loans we actually notified in this run — NOT every
-            # qualifying loan. Marking all qual_ids "sent" silently absorbs loans
-            # that were never individually notified, so they can never fire later.
-            storage.mark_notifications_sent(sorted(str(ln["loanId"]) for ln in to_send))
-            log.info("sent: %d loans, notify-state updated", len(to_send))
-        else:
-            log.warning("no channel succeeded — notify-state NOT updated, will retry next run")
-    elif qualifying:
-        if changed and not new_ids:
-            # only drops changed the set — record new state, do NOT notify.
-            # CRITICAL: preserve the previous notifiedAt — stamping now() here
-            # silently resets the digest clock WITHOUT sending any message, so
-            # a market where loans keep getting funded never fires a digest.
-            storage.save_notify_state(
-                sorted(qual_ids), notified_at=prev_state.get("notifiedAt")
-            )
-            log.info("qualifying set shrank (drops only) — state updated, no notify")
-        else:
-            log.info(
-                "qualifying set unchanged (%d loans) and no digest due — staying silent",
-                len(qualifying),
-            )
-    else:
+    errors = ["telegram loud delivery failed"] if new_high_ids and not high_sent else []
+    old_receipts = prev_state.get("channels")
+    # Legacy state cannot identify its successful channel. Preserve its dedup
+    # baseline for both channels even when migration starts with alerts disabled.
+    prior_receipts = old_receipts if old_receipts is not None else {
+        name: prev_state for name in results
+    }
+    receipts = {
+        name: {"qualifyingIds": sorted(set(receipt.get("qualifyingIds", [])) & qual_ids),
+               "notifiedAt": receipt.get("notifiedAt")}
+        for name, receipt in prior_receipts.items()
+    }
+    delivered_ids = set()
+    dashboard_url = os.environ.get("DASHBOARD_URL", "https://chirag127.github.io/i2i-yield-watch/")
+    for channel in results:
+        if not _enabled(f"{channel.upper()}_ENABLED"):
+            continue
+        # Preserve legacy dedup once; a newly enabled channel needs its own receipt.
+        prior = prior_receipts.get(channel, {})
+        acknowledged = {str(x) for x in prior.get("qualifyingIds", [])} & qual_ids
+        timestamp = prior.get("notifiedAt")
+        pending_ids = qual_ids - acknowledged
+        due = _digest_due(timestamp, digest_hours)
+        to_send = [ln for ln in qualifying if str(ln["loanId"]) in pending_ids] \
+            if pending_ids else qualifying if due else []
+        if to_send:
+            stats = {"activeCount": len(active), "qualifyingCount": len(qualifying),
+                     "newQualifyingCount": len(pending_ids), "droppedCount": len(dropped_ids),
+                     "rateThreshold": threshold}
+            outcome = notify_all(to_send, stats, dashboard_url, threshold, channels={channel})
+            results[channel] = outcome.get(channel) is True
+            if results[channel]:
+                sent_ids = {str(ln["loanId"]) for ln in to_send}
+                acknowledged.update(sent_ids)
+                timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                storage.mark_notifications_sent(sorted(sent_ids))
+            else:
+                errors.append(f"{channel} detailed delivery failed")
+                log.warning("%s delivery failed; unacknowledged loans remain pending", channel)
+        receipts[channel] = {"qualifyingIds": sorted(acknowledged), "notifiedAt": timestamp}
+        delivered_ids.update(acknowledged)
+
+    # Loud acknowledgements cannot consume detailed retries. Empty high sets re-arm the tier.
+    delivered_high_ids = high_ids if high_sent else high_ids & prev_high_ids
+    timestamps = [receipt["notifiedAt"] for receipt in receipts.values() if receipt["notifiedAt"]]
+    notified_at = max(timestamps) if timestamps else prev_state.get("notifiedAt")
+    market_thresholds = {"detailed": threshold, "loud": high_threshold}
+    if (receipts != old_receipts or delivered_ids != prev_ids
+            or delivered_high_ids != prev_high_ids
+            or market_thresholds != prev_state.get("marketThresholds")):
+        storage.save_notify_state(sorted(delivered_ids), notified_at=notified_at,
+                                  high_ids=sorted(delivered_high_ids), channels=receipts,
+                                  market_thresholds=market_thresholds)
+    if not qualifying:
         log.info("no qualifying loans — nothing to notify")
-        if changed:
-            # set went non-empty -> empty; record so we don't re-fire on next run
-            storage.save_notify_state([])
 
     completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     summary = {
@@ -279,32 +276,21 @@ def run(raw_rows: list[dict] | None = None, client=None) -> dict:
         "loudTierSent": high_sent,
         "rateThreshold": threshold,
         "highRateThreshold": high_threshold,
-        "errors": [],
+        "errors": errors,
         "notificationsSent": results,
     }
-    # Persist only high-tier loans whose loud alert was delivered. If delivery
-    # fails, leave the loan out of highIds so the next poll retries it instead
-    # of permanently suppressing the alert after one transient Telegram error.
-    if high_ids or high_sent:
-        try:
-            cur = storage.load_notify_state()
-            delivered_high_ids = high_ids - new_high_ids if new_high_ids else high_ids
-            if high_sent:
-                delivered_high_ids = high_ids
-            if sorted(delivered_high_ids) != sorted(cur.get("highIds", [])):
-                storage.save_notify_state(
-                    sorted(qual_ids), notified_at=cur.get("notifiedAt"),
-                    high_ids=sorted(delivered_high_ids),
-                )
-        except Exception as e:  # noqa: BLE001
-            log.warning("could not persist loud-tier state: %s", e)
-
     storage.append_changelog(summary)
 
     # Dispatch invest workflow immediately when qualifying loans are detected,
     # so real money is placed within seconds instead of waiting for the next
     # cron tick (up to 10 min). Best-effort: cron fallback still covers it.
-    if qualifying and (new_ids or new_high_ids):
+    previous_thresholds = prev_state.get("marketThresholds", market_thresholds)
+    previous_qual_ids = {str(ln["loanId"]) for ln in existing
+                         if (ln.get("interestRate") or 0) > previous_thresholds["detailed"]}
+    previous_high_ids = {str(ln["loanId"]) for ln in existing
+                         if (ln.get("interestRate") or 0) > previous_thresholds["loud"]}
+    # Market novelty is independent of delivery receipts; a send failure must not redispatch money workflows.
+    if qualifying and (qual_ids - previous_qual_ids or high_ids - previous_high_ids):
         try:
             _dispatch_invest()
         except Exception as e:  # noqa: BLE001

@@ -127,6 +127,11 @@ def test_send_telegram_text_silent_flag(monkeypatch):
     calls: list[dict] = []
 
     class _R:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True}
+
         def raise_for_status(self):
             pass
 

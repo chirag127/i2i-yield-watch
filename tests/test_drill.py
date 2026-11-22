@@ -1,100 +1,165 @@
-"""Alert drill: synthetic loan through the REAL pipeline, ephemeral storage,
-invest dispatch neutralized. Proves Telegram e2e without money movement."""
+"""Synthetic alerts exercise real formatting/storage with offline HTTP replies."""
 
+import json
+import os
+import socket
+import tempfile
 from pathlib import Path
 
+import httpx
 import pytest
 
-import i2i_watch.pipeline as pipeline
-import i2i_watch.storage as storage
-from i2i_watch.drill import run as drill_run
+from i2i_watch import drill, pipeline, storage
+from i2i_watch.client import I2iClient
+from i2i_watch.notify import channels
 
 
 @pytest.fixture
-def json_backend(tmp_path, monkeypatch):
-    monkeypatch.setattr(storage, "_data_dir", lambda: tmp_path)
-    monkeypatch.setattr(storage, "_mode", None)
-    monkeypatch.setattr(storage, "_app", None)
-    monkeypatch.setattr(storage, "_db", None)
-    monkeypatch.setenv("I2I_STORAGE", "json")
-    monkeypatch.setenv("STARTUP_JITTER_MS", "0")
+def isolated_drill(tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("NOTIFY_MIN_RATE_PCT", "40")
     monkeypatch.setenv("NOTIFY_HIGH_RATE_PCT", "100")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+    monkeypatch.setenv("TELEGRAM_ENABLED", "1")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Drill attempted listing, authentication, or investment dispatch")
+
+    monkeypatch.setattr(pipeline, "fetch_all_loans", forbidden)
+    monkeypatch.setattr(I2iClient, "from_env", forbidden)
+    monkeypatch.setattr(pipeline, "_dispatch_invest", forbidden)
     return tmp_path
 
 
-def _patch_delivery(monkeypatch, telegram_ok=True, standard_ok=None):
-    sent = {"loud": [], "standard": []}
-    standard_ok = telegram_ok if standard_ok is None else standard_ok
+def _delivery(monkeypatch, loud=True, detailed=True):
+    messages = []
 
-    def fake_send_text(text, silent=False):
-        sent["loud"].append((silent, text))
-        return telegram_ok
+    def post(url, *, json=None, timeout, **kwargs):
+        if url != "https://api.telegram.org/bottest-token/sendMessage":
+            pytest.fail("Drill attempted a non-Telegram HTTP request")
+        assert json["chat_id"] == "123"
+        assert json["parse_mode"] == "HTML"
+        messages.append(json["text"])
+        accepted = loud if "AUTO-INVEST CANDIDATE" in json["text"] else detailed
+        body = {"ok": True, "result": {"message_id": len(messages)}} if accepted else {
+            "ok": False, "description": "synthetic rejection"}
+        return httpx.Response(200, json=body, request=httpx.Request("POST", url))
 
-    def fake_notify_all(loans, stats, dashboard_url, threshold):
-        sent["standard"].append([str(ln["loanId"]) for ln in loans])
-        return {"telegram": standard_ok, "ntfy": False}
-
-    monkeypatch.setattr(pipeline, "send_telegram_text", fake_send_text)
-    monkeypatch.setattr(pipeline, "notify_all", fake_notify_all)
-    return sent
+    monkeypatch.setattr(channels.httpx, "post", post)
+    return messages
 
 
-def test_drill_fires_loud_and_detailed_alerts(json_backend, monkeypatch):
-    sent = _patch_delivery(monkeypatch, telegram_ok=True)
+def _state():
+    return (
+        pipeline._dispatch_invest, storage._data_dir,
+        storage._mode, storage._app, storage._db,
+        {key: os.environ.get(key) for key in
+         ("I2I_STORAGE", "TELEGRAM_ENABLED", "NTFY_ENABLED")},
+    )
 
-    out = drill_run(rate=120.0)
+
+@pytest.mark.parametrize("loud,detailed", [(True, True), (True, False), (False, True), (False, False)])
+def test_drill_requires_both_deliveries_and_restores_state(isolated_drill, monkeypatch, loud, detailed):
+    messages = _delivery(monkeypatch, loud=loud, detailed=detailed)
+    before = _state()
+
+    out = drill.run(rate=120)
+
+    assert out["e2eConfirmed"] is (loud and detailed)
+    assert out["loudAlertSent"] is loud
+    assert out["detailedAlertSent"] is detailed
+    assert len(messages) == 2
+    assert all("DRILL" in message for message in messages)
+    assert _state() == before
+    assert not Path(out["storageDir"]).exists()
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_drill_is_telegram_only_and_restores_inherited_settings(isolated_drill, monkeypatch, configured):
+    messages = _delivery(monkeypatch)
+    if configured:
+        monkeypatch.setenv("I2I_STORAGE", "firebase")
+        monkeypatch.setenv("TELEGRAM_ENABLED", "0")
+        monkeypatch.setenv("NTFY_ENABLED", "1")
+        monkeypatch.setenv("NTFY_TOPIC", "must-not-send")
+    else:
+        for key in ("I2I_STORAGE", "TELEGRAM_ENABLED", "NTFY_ENABLED"):
+            monkeypatch.delenv(key, raising=False)
+    handles = [object(), object()]
+    monkeypatch.setattr(storage, "_mode", "firebase")
+    monkeypatch.setattr(storage, "_app", handles[0])
+    monkeypatch.setattr(storage, "_db", handles[1])
+    before = _state()
+
+    out = drill.run()
 
     assert out["e2eConfirmed"] is True
-    assert out["loudAlertSent"] is True
-    assert out["detailedAlertSent"] is True
-    assert out["loanId"].startswith("DRILL")
-    # Loud tier really fired with the candidate header; the DRILL<ts> loan id
-    # is the label on the loud message (it has no purpose line).
-    assert any(not s and "AUTO-INVEST CANDIDATE" in t for s, t in sent["loud"])
-    assert any("DRILL" in t for _s, t in sent["loud"])
-    # Detailed tier notified exactly the synthetic loan (its block carries [DRILL])
-    assert sent["standard"] == [[out["loanId"]]]
+    assert len(messages) == 2
+    assert _state() == before
 
 
-def test_drill_neutralizes_invest_dispatch(json_backend, monkeypatch):
-    original = pipeline._dispatch_invest
-    _patch_delivery(monkeypatch, telegram_ok=True)
+def test_drill_real_state_is_temporary_and_removed(isolated_drill, monkeypatch):
+    _delivery(monkeypatch)
+    original_dir = storage._data_dir()
+    original_dir.mkdir()
+    sentinel = original_dir / "notify-state.json"
+    sentinel.write_text('{"qualifyingIds": ["existing"]}', encoding="utf-8")
+    before = sentinel.read_bytes()
+    real_pipeline = pipeline.run
+    observed = []
 
-    out = drill_run()
+    def inspect_pipeline(**kwargs):
+        summary = real_pipeline(**kwargs)
+        temporary_dir = storage._data_dir()
+        observed.append(temporary_dir)
+        assert temporary_dir != original_dir
+        state = json.loads((temporary_dir / "notify-state.json").read_text(encoding="utf-8"))
+        assert state["highIds"] == [kwargs["raw_rows"][0]["pl_bloan_id"]]
+        assert (temporary_dir / "active-loans.json").exists()
+        assert not (temporary_dir / "invested-loans.json").exists()
+        return summary
 
-    # The drill swapped out the real-money dispatch before the pipeline ran.
-    assert pipeline._dispatch_invest is not original
-    assert out["e2eConfirmed"] is True
-    # No investment bookkeeping was created anywhere in the drill's storage.
-    assert not (Path(out["storageDir"]) / "invested-loans.json").exists()
-
-
-def test_drill_state_is_ephemeral_no_repo_leak(json_backend, monkeypatch):
-    _patch_delivery(monkeypatch, telegram_ok=True)
-    repo_data = Path(__file__).parents[1] / "data"
-    before = {p.name: p.read_bytes() for p in repo_data.glob("*.json")} \
-        if repo_data.exists() else {}
-
-    out = drill_run()
-
-    assert out["storageDir"] != str(repo_data)
-    after = {p.name: p.read_bytes() for p in repo_data.glob("*.json")} \
-        if repo_data.exists() else {}
-    assert before == after  # nothing leaked into the real data dir
-    assert (Path(out["storageDir"]) / "notify-state.json").exists()
+    monkeypatch.setattr(pipeline, "run", inspect_pipeline)
+    drill.run()
+    assert observed and all(not directory.exists() for directory in observed)
+    assert sentinel.read_bytes() == before
+    assert storage._data_dir() == original_dir
 
 
-def test_drill_refuses_below_gate_rate(json_backend):
+@pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+def test_drill_restores_globals_and_cleans_up_after_pipeline_failure(isolated_drill, monkeypatch, error):
+    before = _state()
+    observed = []
+
+    def fail_pipeline(**kwargs):
+        storage.save_notify_state(["temporary"])
+        observed.append(storage._data_dir())
+        raise error("synthetic pipeline failure")
+
+    monkeypatch.setattr(pipeline, "run", fail_pipeline)
+    with pytest.raises(error, match="synthetic pipeline failure"):
+        drill.run()
+    assert _state() == before
+    assert observed and all(not directory.exists() for directory in observed)
+
+
+def test_drill_refuses_below_gate_without_mutation(isolated_drill):
+    before = _state()
     with pytest.raises(ValueError, match="below-gate drill proves nothing"):
-        drill_run(rate=20.0)
+        drill.run(rate=20)
+    assert _state() == before
+    assert list(isolated_drill.glob("i2i-drill-*")) == []
 
 
-def test_drill_fails_closed_when_telegram_down(json_backend, monkeypatch):
-    _patch_delivery(monkeypatch, telegram_ok=False)
+def test_test_isolation_blocks_real_connections():
+    with socket.socket() as connection:
+        with pytest.raises(pytest.fail.Exception, match="Unmocked network"):
+            connection.connect(("127.0.0.1", 9))
 
-    out = drill_run()
 
-    assert out["e2eConfirmed"] is False
-    assert out["loudAlertSent"] is False
-    assert out["detailedAlertSent"] is False
+def test_test_isolation_preserves_explicit_http_transport():
+    with httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"fixture": True})
+    )) as client:
+        assert client.get("https://offline.invalid/").json() == {"fixture": True}

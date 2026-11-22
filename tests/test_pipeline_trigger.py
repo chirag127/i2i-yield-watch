@@ -25,6 +25,9 @@ def json_backend(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "_db", None)
     monkeypatch.setenv("STARTUP_JITTER_MS", "0")
     monkeypatch.setenv("NOTIFY_MIN_RATE_PCT", "40")
+    monkeypatch.setenv("TELEGRAM_ENABLED", "1")
+    monkeypatch.setenv("NTFY_ENABLED", "0")
+    monkeypatch.setattr(pipeline, "_dispatch_invest", lambda: None)
     monkeypatch.delenv("I2I_DIGEST", raising=False)
     monkeypatch.delenv("I2I_DIGEST_HOURS", raising=False)
     return tmp_path
@@ -34,7 +37,7 @@ def json_backend(tmp_path, monkeypatch):
 def capture_notify(monkeypatch):
     sent = []
 
-    def fake_notify_all(loans, stats, dashboard_url, threshold):
+    def fake_notify_all(loans, stats, dashboard_url, threshold, **kwargs):
         sent.append([str(ln["loanId"]) for ln in loans])
         return {"telegram": True, "ntfy": False}
 
@@ -279,3 +282,152 @@ def test_digest_helpers(monkeypatch):
     assert pipeline._digest_due(None, 0) is False
     assert pipeline._digest_due(None, 6) is True
     assert pipeline._digest_due("2000-01-01T00:00:00Z", 6) is True
+
+
+@pytest.mark.parametrize("loud_ok", [True, False])
+def test_loud_state_cannot_consume_failed_detailed_alerts(json_backend, monkeypatch, loud_ok):
+    storage.save_notify_state([], notified_at=None, high_ids=["obsolete"])
+    detailed = []
+    monkeypatch.setattr(pipeline, "send_telegram_text", lambda *a, **k: loud_ok)
+
+    def deliver(loans, *args, **kwargs):
+        detailed.append([str(loan["loanId"]) for loan in loans])
+        return {"telegram": len(detailed) > 1, "ntfy": False}
+
+    monkeypatch.setattr(pipeline, "notify_all", deliver)
+    raw = [_loan("1", 120), _loan("2", 60)]
+    first = pipeline.run(raw_rows=raw)
+    assert storage.load_notify_state()["qualifyingIds"] == []
+    assert first["errors"]
+    pipeline.run(raw_rows=raw)
+    pipeline.run(raw_rows=raw)
+    assert detailed == [["1", "2"], ["1", "2"]]
+    assert storage.load_notifications_sent() == {"1", "2"}
+
+
+@pytest.mark.parametrize("failed_channel", ["telegram", "ntfy"])
+def test_failed_channel_retries_without_repeating_successful_channel(
+        json_backend, monkeypatch, failed_channel):
+    monkeypatch.setenv("NTFY_ENABLED", "1")
+    attempts = {"telegram": [], "ntfy": []}
+
+    def deliver(loans, *args, channels=None):
+        results = {"telegram": False, "ntfy": False}
+        for channel in channels or results.keys():
+            attempts[channel].append([str(loan["loanId"]) for loan in loans])
+            results[channel] = channel != failed_channel or len(attempts[channel]) > 1
+        return results
+
+    monkeypatch.setattr(pipeline, "notify_all", deliver)
+    for _ in range(3):
+        pipeline.run(raw_rows=[_loan("1", 60)])
+    other = "ntfy" if failed_channel == "telegram" else "telegram"
+    assert attempts[failed_channel] == [["1"], ["1"]]
+    assert attempts[other] == [["1"]]
+
+
+def test_loud_alert_rearms_after_rate_drops_below_gate(json_backend, capture_notify, monkeypatch):
+    loud = []
+    monkeypatch.setattr(pipeline, "send_telegram_text", lambda text: loud.append(text) or True)
+    pipeline.run(raw_rows=[_loan("1", 120)])
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    assert storage.load_notify_state()["highIds"] == []
+    pipeline.run(raw_rows=[_loan("1", 120)])
+    assert len(loud) == 2
+
+
+def test_drop_only_does_not_reset_channel_digest_clock(json_backend, capture_notify, monkeypatch):
+    pipeline.run(raw_rows=[_loan("1", 60), _loan("2", 70)])
+    state = storage.load_notify_state()
+    timestamp = "2000-01-01T00:00:00Z"
+    state["notifiedAt"] = timestamp
+    for receipt in state.get("channels", {}).values():
+        receipt["notifiedAt"] = timestamp
+    storage._write_json("notify-state.json", state)
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    assert storage.load_notify_state()["notifiedAt"] == timestamp
+    monkeypatch.setenv("I2I_DIGEST_HOURS", "6")
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    assert capture_notify == [["1", "2"], ["1"]]
+
+
+def test_newly_enabled_channel_receives_current_loans(json_backend, monkeypatch):
+    attempts = {"telegram": 0, "ntfy": 0}
+
+    def deliver(loans, *args, channels=None):
+        results = {"telegram": False, "ntfy": False}
+        for channel in channels or results.keys():
+            attempts[channel] += 1
+            results[channel] = True
+        return results
+
+    monkeypatch.setattr(pipeline, "notify_all", deliver)
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    monkeypatch.setenv("NTFY_ENABLED", "1")
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    assert attempts == {"telegram": 1, "ntfy": 1}
+
+
+def test_disabled_channel_retains_receipts_but_receives_unseen_loans(json_backend, capture_notify, monkeypatch):
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    timestamp = storage.load_notify_state()["channels"]["telegram"]["notifiedAt"]
+    monkeypatch.setenv("TELEGRAM_ENABLED", "0")
+    pipeline.run(raw_rows=[_loan("1", 60), _loan("2", 70)])
+    state = storage.load_notify_state()["channels"]["telegram"]
+    assert state == {"qualifyingIds": ["1"], "notifiedAt": timestamp}
+    monkeypatch.setenv("TELEGRAM_ENABLED", "1")
+    pipeline.run(raw_rows=[_loan("1", 60), _loan("2", 70)])
+    pipeline.run(raw_rows=[_loan("1", 60), _loan("2", 70)])
+    assert capture_notify == [["1"], ["2"]]
+
+
+def test_detailed_retries_do_not_repeat_invest_dispatch(json_backend, monkeypatch):
+    dispatched = []
+    detailed = []
+    monkeypatch.setattr(pipeline, "_dispatch_invest", lambda: dispatched.append(True))
+    monkeypatch.setattr(pipeline, "send_telegram_text", lambda *a, **k: True)
+
+    def fail_delivery(loans, *args, **kwargs):
+        detailed.append([str(loan["loanId"]) for loan in loans])
+        return {"telegram": False, "ntfy": False}
+
+    monkeypatch.setattr(pipeline, "notify_all", fail_delivery)
+    for _ in range(3):
+        pipeline.run(raw_rows=[_loan("1", 120)])
+    assert detailed == [["1"], ["1"], ["1"]]
+    assert dispatched == [True]
+
+
+def test_legacy_snapshot_migrates_without_resending(json_backend, capture_notify):
+    storage._write_json("notify-state.json", {
+        "qualifyingIds": ["1"], "highIds": [], "notifiedAt": "2026-11-01T00:00:00Z",
+    })
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    assert capture_notify == []
+    assert storage.load_notify_state()["channels"]["telegram"] == {
+        "qualifyingIds": ["1"], "notifiedAt": "2026-11-01T00:00:00Z",
+    }
+
+
+def test_legacy_receipts_survive_migration_while_disabled(json_backend, capture_notify, monkeypatch):
+    storage._write_json("notify-state.json", {
+        "qualifyingIds": ["1"], "highIds": [], "notifiedAt": "2026-11-01T00:00:00Z",
+    })
+    monkeypatch.setenv("TELEGRAM_ENABLED", "0")
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    monkeypatch.setenv("TELEGRAM_ENABLED", "1")
+    pipeline.run(raw_rows=[_loan("1", 60)])
+    assert capture_notify == []
+
+
+def test_lowered_high_gate_dispatches_once_despite_failed_delivery(json_backend, monkeypatch):
+    dispatched = []
+    monkeypatch.setattr(pipeline, "_dispatch_invest", lambda: dispatched.append(True))
+    monkeypatch.setattr(pipeline, "send_telegram_text", lambda *a, **k: False)
+    monkeypatch.setattr(pipeline, "notify_all", lambda *a, **k: {"telegram": False, "ntfy": False})
+    monkeypatch.setenv("NOTIFY_HIGH_RATE_PCT", "150")
+    pipeline.run(raw_rows=[_loan("1", 120)])
+    monkeypatch.setenv("NOTIFY_HIGH_RATE_PCT", "100")
+    pipeline.run(raw_rows=[_loan("1", 120)])
+    pipeline.run(raw_rows=[_loan("1", 120)])
+    assert dispatched == [True, True]

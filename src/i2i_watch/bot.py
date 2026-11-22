@@ -57,6 +57,19 @@ def command_menu() -> list[dict]:
     ]
 
 
+def _telegram_response(request, timeout: int, method: str) -> dict:
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"{method} failed: HTTP {error.code}") from None
+    except Exception as error:  # noqa: BLE001 — URLs and response bodies may contain secrets
+        raise RuntimeError(f"{method} failed: {type(error).__name__}") from None
+    if not isinstance(data, dict) or data.get("ok") is not True:
+        raise RuntimeError(f"{method} failed: API acknowledgement missing or rejected")
+    return data
+
+
 def register_commands(token: str) -> None:
     """Register the slash-command menu with Telegram (setMyCommands).
 
@@ -67,13 +80,7 @@ def register_commands(token: str) -> None:
     url = TELEGRAM_API.format(token=token, method="setMyCommands")
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"setMyCommands failed: HTTP {e.code}") from e
-    if not data.get("ok"):
-        raise RuntimeError(f"setMyCommands failed: {data}")
+    _telegram_response(req, 20, "setMyCommands")
 
 
 def build_help(include_howto: bool = True) -> str:
@@ -149,8 +156,14 @@ def load_state(path: str) -> dict:
 
 
 def save_state(path: str, state: dict) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(state, indent=2), encoding="utf-8")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    try:
+        temporary.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def get_updates(token: str, offset: int, timeout: int = 50, limit: int = 10) -> list[dict]:
@@ -161,10 +174,7 @@ def get_updates(token: str, offset: int, timeout: int = 50, limit: int = 10) -> 
         "allowed_updates": json.dumps(["message"]),
     })
     url = f"{TELEGRAM_API.format(token=token, method='getUpdates')}?{q}"
-    with urllib.request.urlopen(url, timeout=timeout + 20) as r:
-        data = json.loads(r.read().decode("utf-8"))
-    if not data.get("ok"):
-        raise RuntimeError(f"getUpdates failed: {data}")
+    data = _telegram_response(url, timeout + 20, "getUpdates")
     return data.get("result", [])
 
 
@@ -180,7 +190,9 @@ def dispatch(repo: str, workflow: str, token: str) -> str | None:
         with urllib.request.urlopen(req, timeout=20) as r:
             return None  # 204 No Content — queued
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"dispatch {workflow} failed: HTTP {e.code} {e.read()[:200]}") from e
+        raise RuntimeError(f"dispatch failed: HTTP {e.code}") from None
+    except Exception as e:  # noqa: BLE001 — do not expose request URLs or response bodies
+        raise RuntimeError(f"dispatch failed: {type(e).__name__}") from None
 
 
 def send_message(token: str, chat_id: str, text: str) -> None:
@@ -193,13 +205,7 @@ def send_message(token: str, chat_id: str, text: str) -> None:
     url = TELEGRAM_API.format(token=token, method="sendMessage")
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"sendMessage failed: HTTP {e.code}") from e
-    if not data.get("ok"):
-        raise RuntimeError(f"sendMessage failed: {data}")
+    _telegram_response(req, 20, "sendMessage")
 
 
 def handle(cmd: str | None, repo: str, gh_token: str, stats_path: str | None = None) -> str:
@@ -229,31 +235,42 @@ def run_poll(
     stats_path: str | None = None,
     timeout: int = 50,
 ) -> int:
-    """One long-poll cycle: fetch, process, reply, persist offset.
+    """Poll and checkpoint each update before attempting its command.
 
-    Returns the number of messages acted on. Offset persistence (git-as-DB
-    state file) means a crashed run never re-processes old messages.
+    Dispatch responses can be lost after acceptance. Prefer a missed attempt
+    over automatically repeating a money-changing command. The workflow must
+    also push this local checkpoint to preserve it across runner replacement.
     """
     state = load_state(state_path)
     offset = int(state.get("last_update_id", 0) or 0)
     updates = get_updates(token, offset + 1, timeout)
     acted = 0
-    max_id = offset
     for upd in updates:
         upd_id = int(upd.get("update_id", 0) or 0)
-        max_id = max(max_id, upd_id)
+        if upd_id <= offset:
+            continue
+        # Persist before dispatch: both success and uncertain failure must not
+        # replay when a later update fails or the next poll resumes.
+        save_state(state_path, {"last_update_id": upd_id})
+        offset = upd_id
         msg = upd.get("message") or {}
-        if not is_owner((msg.get("chat") or {}).get("id"), chat_id):
+        incoming_chat_id = (msg.get("chat") or {}).get("id")
+        if not is_owner(incoming_chat_id, chat_id):
             continue
         cmd = parse_command(msg.get("text") or "")
-        reply = handle(cmd, repo, gh_token, stats_path)
+        try:
+            reply = handle(cmd, repo, gh_token, stats_path)
+        except Exception as e:  # noqa: BLE001 — an uncertain dispatch must not replay
+            print(f"command outcome not confirmed: {type(e).__name__}", file=sys.stderr)
+            reply = (
+                "⚠️ Command outcome not confirmed; it will not be retried automatically. "
+                "Check Actions before sending the command again."
+            )
         acted += 1
         try:
-            send_message(token, chat_id, reply)
+            send_message(token, str(incoming_chat_id), reply)
         except Exception as e:  # noqa: BLE001 — dispatch already done; keep polling
-            print(f"reply failed (dispatch already done): {e}", file=sys.stderr)
-    if max_id > offset:
-        save_state(state_path, {"last_update_id": max_id})
+            print(f"reply failed after command attempt: {type(e).__name__}", file=sys.stderr)
     return acted
 
 
@@ -285,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         register_commands(token)
         print("registered command menu with Telegram", flush=True)
     except Exception as e:  # noqa: BLE001
-        print(f"command-menu registration failed (non-fatal): {e}", file=sys.stderr)
+        print(f"command-menu registration failed (non-fatal): {type(e).__name__}", file=sys.stderr)
 
     def _poll() -> int:
         """One long-poll cycle; returns messages acted on."""
@@ -309,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
                 consec_failures = 0
             except Exception as e:  # noqa: BLE001
                 consec_failures += 1
-                print(f"poll {i} failed ({consec_failures} consecutive): {e}", file=sys.stderr)
+                print(f"poll {i} failed ({consec_failures} consecutive): {type(e).__name__}", file=sys.stderr)
                 if consec_failures >= args.max_failures:
                     print(f"{args.max_failures} consecutive poll failures — bot broken, exiting",
                           file=sys.stderr)
@@ -324,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
             acted_total += _poll()
         except Exception as e:  # noqa: BLE001
             failures += 1
-            print(f"poll {i} failed: {e}", file=sys.stderr)
+            print(f"poll {i} failed: {type(e).__name__}", file=sys.stderr)
         if i < args.iterations:
             time.sleep(2)
     print(f"acted on {acted_total} messages ({failures} poll failures)", flush=True)
