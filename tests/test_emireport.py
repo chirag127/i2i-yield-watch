@@ -9,11 +9,16 @@ EMI status; getEMIStatusOverview + InDetail carry the aggregate numbers).
 
 from __future__ import annotations
 
+import json
+from unittest.mock import Mock
+
 import pytest
 
+from i2i_watch import emireport
 from i2i_watch.client import I2iClient
 from i2i_watch.emireport import (
     build_aggregates,
+    build_report,
     delay_bucket,
     is_defaulted,
     normalize_loan,
@@ -108,7 +113,43 @@ def test_normalize_loan_marks_delayed_without_day_count():
     # Delayed status but no delayDays field -> delayDays None (bucket 'unknown')
     ln = normalize_loan({"loanId": 2, "currentStatus": "Delayed"})
     assert ln["delayDays"] is None
-    assert ln["totalPending"] == 0.0
+    assert ln["totalPending"] is None
+
+
+@pytest.mark.parametrize("value", [None, "", "unavailable", "NaN", "Infinity", True])
+def test_normalize_unknown_numbers_are_not_zero(value):
+    ln = normalize_loan({"loanId": 1, "totalInvestment": value,
+                         "totalReceived": value, "totalAmountPen": value,
+                         "delayedDays": value})
+    for key in ("amountInvested", "amountReceived", "totalPending", "delayDays"):
+        assert ln[key] is None
+    assert delay_bucket(ln["delayDays"]) == "unknown"
+
+
+def test_normalize_preserves_explicit_zero_pending_over_splits():
+    ln = normalize_loan({"loanId": 1, "totalAmountPen": 0,
+                         "totalPrincipalPen": 100, "totalIntPen": 20})
+    assert ln["totalPending"] == 0
+
+
+@pytest.mark.parametrize("row", [
+    {"totalPrincipalPen": 100},
+    {"totalIntPen": 20},
+    {"totalAmountPen": "invalid", "totalPrincipalPen": 100, "totalIntPen": 20},
+])
+def test_normalize_does_not_guess_pending_from_incomplete_or_invalid_amounts(row):
+    assert normalize_loan(row)["totalPending"] is None
+
+
+@pytest.mark.parametrize("status", ["Delayed", "Overdue"])
+def test_zero_delay_with_overdue_status_is_unknown(status):
+    ln = normalize_loan({"currentStatus": status, "delayedDays": 0})
+    assert delay_bucket(ln["delayDays"]) == "unknown"
+
+
+@pytest.mark.parametrize("days", [-1, float("nan"), float("inf")])
+def test_invalid_delay_is_unknown(days):
+    assert delay_bucket(days) == "unknown"
 
 
 # ── is_defaulted ─────────────────────────────────────────────────────────────
@@ -128,12 +169,15 @@ def test_is_defaulted_closed_or_ontime_is_false():
         assert is_defaulted({"currentStatus": st, "delayDays": 0}) is False
 
 
-def test_is_defaulted_by_money_when_no_status():
-    # no status/days but received < invested and pending > 0 -> defaulted
+def test_pending_money_alone_is_not_evidence_of_default():
     assert is_defaulted({"currentStatus": "", "amountInvested": 5000.0,
-                         "amountReceived": 500.0, "totalPending": 4500.0})
+                         "amountReceived": 500.0, "totalPending": 4500.0}) is False
     assert is_defaulted({"currentStatus": "", "amountInvested": 5000.0,
                          "amountReceived": 5000.0, "totalPending": 0.0}) is False
+
+
+def test_not_due_status_is_not_defaulted():
+    assert is_defaulted({"currentStatus": "Not Due"}) is False
 
 
 # ── build_aggregates ─────────────────────────────────────────────────────────
@@ -181,6 +225,108 @@ def test_aggregates_unknown_bucket_for_delayed_without_days():
     agg = build_aggregates(loans)
     assert agg["delayedBuckets"]["unknown"]["count"] == 1
     assert agg["defaulted"]["count"] == 1  # status-derived default
+
+
+def test_missing_amounts_propagate_to_totals_instead_of_partial_sums():
+    loans = [
+        normalize_loan({"loanId": 1, "totalInvestment": 100,
+                        "totalReceived": 20, "totalAmountPen": 80,
+                        "totalPrincipalPen": 70, "totalIntPen": 10,
+                        "currentStatus": "Delayed"}),
+        normalize_loan({"loanId": 2, "currentStatus": "Delayed"}),
+    ]
+    agg = build_aggregates(loans)
+    for key in ("totalInvested", "totalReceived", "totalPending",
+                "principalPending", "interestPending", "recoveryRate"):
+        assert agg[key] is None
+    assert agg["delayedBuckets"]["unknown"] == {"count": 2, "pending": None}
+    assert agg["defaulted"]["totalPending"] is None
+    assert agg["delayedBuckets"]["ontime"] == {"count": 0, "pending": 0}
+
+
+def _report_client(rows, status=None):
+    client = Mock(spec=I2iClient)
+    client.emi_loans.return_value = rows
+    client.emi_status_overview.return_value = {"body": {}}
+    client.emi_status_detail.return_value = {"body": {}}
+    client.emi_loan_status.return_value = {"body": status or {}}
+    client.delayed_loan_status.return_value = {}
+    return client
+
+
+def test_report_propagates_failed_loan_collection():
+    client = _report_client([])
+    client.emi_loans.side_effect = RuntimeError("incomplete loan collection")
+    with pytest.raises(RuntimeError, match="incomplete loan collection"):
+        build_report(client, "synthetic")
+
+
+@pytest.mark.parametrize("rows", [None, {}, {"body": []}, [None], [{}]])
+def test_report_rejects_malformed_loan_collection(rows):
+    with pytest.raises(ValueError, match="loan"):
+        build_report(_report_client(rows), "synthetic")
+
+
+def test_report_accepts_confirmed_empty_book():
+    report = build_report(_report_client([]), "synthetic")
+    assert report["loans"] == []
+    assert report["aggregates"]["totalLoans"] == 0
+    assert report["aggregates"]["totalPending"] == 0
+
+
+@pytest.mark.parametrize("delay_key", ["delayedDays", "delayDays", "daysDelayed",
+                                      "noOfDaysDelayed", "overdueDays",
+                                      "daysOverdue", "pendingDays"])
+@pytest.mark.parametrize("status_key", ["currentStatus", "loanStatus", "emiStatus", "status"])
+def test_report_enrichment_normalizes_aliases(delay_key, status_key):
+    row = {"loanId": 1, "currentStatus": "Partial Paid"}
+    client = _report_client([row], {delay_key: "45", status_key: "Overdue"})
+    report = build_report(client, "synthetic")
+    loan = report["loans"][0]
+    assert loan["delayDays"] == 45.0
+    assert loan["currentStatus"] == "Overdue"
+    assert loan["raw"] == row
+    assert report["aggregates"]["delayedBuckets"]["30to90"]["count"] == 1
+
+
+@pytest.mark.parametrize("status", [{}, {"currentStatus": "Delayed"},
+                                  {"delayedDays": "unknown"}])
+def test_report_enrichment_never_turns_unknown_delay_into_ontime(status):
+    client = _report_client([{"loanId": 1, "currentStatus": "Delayed"}], status)
+    report = build_report(client, "synthetic")
+    assert report["loans"][0]["delayDays"] is None
+    assert report["aggregates"]["delayedBuckets"]["unknown"]["count"] == 1
+    assert report["aggregates"]["defaulted"]["count"] == 1
+
+
+def test_report_failed_enrichment_keeps_unknown_delay():
+    client = _report_client([{"loanId": 1, "currentStatus": "Delayed"}])
+    client.emi_loan_status.side_effect = RuntimeError("unavailable")
+    report = build_report(client, "synthetic")
+    assert report["loans"][0]["delayDays"] is None
+
+
+def test_run_failed_book_preserves_existing_report(tmp_path, monkeypatch, capsys):
+    client = _report_client([])
+    client.emi_loans.side_effect = RuntimeError("incomplete loan collection")
+    monkeypatch.setattr(I2iClient, "from_env", lambda account: client)
+    target = tmp_path / "report.json"
+    target.write_text('{"previous": true}', encoding="utf-8")
+    assert emireport.run("synthetic", str(target)) == 1
+    assert target.read_text(encoding="utf-8") == '{"previous": true}'
+    assert not target.with_suffix(".json.tmp").exists()
+    assert "failed" in capsys.readouterr().out.lower()
+
+
+def test_run_prints_unknown_amounts_without_inventing_zero(tmp_path, monkeypatch, capsys):
+    client = _report_client([{"loanId": 1, "currentStatus": "Delayed"}])
+    monkeypatch.setattr(I2iClient, "from_env", lambda account: client)
+    target = tmp_path / "report.json"
+    assert emireport.run("synthetic", str(target)) == 0
+    assert json.loads(target.read_text(encoding="utf-8"))["aggregates"]["totalPending"] is None
+    output = capsys.readouterr().out
+    assert "unknown" in output
+    assert "Rs 0" not in output
 
 
 # ── client: paged emi_loans ──────────────────────────────────────────────────

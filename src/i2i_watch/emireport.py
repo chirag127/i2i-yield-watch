@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import accounts
-from .client import I2iClient, to_float
+from .client import I2iClient
 
 log = logging.getLogger("i2i_watch")
 
@@ -68,37 +69,50 @@ def _first(d: dict, keys: tuple[str, ...], default=None):
     return default
 
 
+def _number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def normalize_loan(row: dict) -> dict:
     """Raw emistatus row -> normalized record with the numbers the analytics
     need. Unknown fields are passed through as None (never invented)."""
     if not isinstance(row, dict):
         return {}
-    total_pending = to_float(_first(row, TOTAL_PENDING_KEYS))
-    if total_pending == 0:
-        # Some responses only split principal/interest pending — derive.
-        total_pending = (to_float(_first(row, PRINCIPAL_PENDING_KEYS))
-                         + to_float(_first(row, INTEREST_PENDING_KEYS)))
+    principal_pending = _number(_first(row, PRINCIPAL_PENDING_KEYS))
+    interest_pending = _number(_first(row, INTEREST_PENDING_KEYS))
+    pending_value = _first(row, TOTAL_PENDING_KEYS)
+    total_pending = _number(pending_value)
+    if (pending_value is None and principal_pending is not None
+            and interest_pending is not None):
+        total_pending = _number(principal_pending + interest_pending)
     status = str(_first(row, STATUS_KEYS, "") or "").strip()
-    delay_days = to_float(_first(row, DELAY_DAYS_KEYS))
-    if delay_days == 0 and "delayed" in status.lower():
-        delay_days = None  # marked delayed but no day count in this row
+    delay_days = _number(_first(row, DELAY_DAYS_KEYS))
+    if delay_days is not None and (delay_days < 0 or (
+            delay_days == 0 and ("delay" in status.lower() or "overdue" in status.lower()))):
+        delay_days = None
     return {
         "loanId": _first(row, LOAN_ID_KEYS),
         "borrowerName": _first(row, BORROWER_NAME_KEYS),
-        "amountInvested": to_float(_first(row, AMOUNT_INVESTED_KEYS)),
-        "amountReceived": to_float(_first(row, AMOUNT_RECEIVED_KEYS)),
-        "principalPending": to_float(_first(row, PRINCIPAL_PENDING_KEYS)),
-        "interestPending": to_float(_first(row, INTEREST_PENDING_KEYS)),
+        "amountInvested": _number(_first(row, AMOUNT_INVESTED_KEYS)),
+        "amountReceived": _number(_first(row, AMOUNT_RECEIVED_KEYS)),
+        "principalPending": principal_pending,
+        "interestPending": interest_pending,
         "totalPending": total_pending,
-        "rate": to_float(_first(row, RATE_KEYS)),
+        "rate": _number(_first(row, RATE_KEYS)),
         "riskCategory": _first(row, RISK_KEYS),
-        "tenure": to_float(_first(row, TENURE_KEYS)),
+        "tenure": _number(_first(row, TENURE_KEYS)),
         "disbursalDate": _first(row, DISBURSAL_KEYS),
         "lastPaymentDate": _first(row, LAST_PAYMENT_KEYS),
         "currentStatus": status,
         "delayDays": delay_days,
-        "emiPaid": to_float(_first(row, EMI_PAID_KEYS)),
-        "emiPending": to_float(_first(row, EMI_PENDING_KEYS)),
+        "emiPaid": _number(_first(row, EMI_PAID_KEYS)),
+        "emiPending": _number(_first(row, EMI_PENDING_KEYS)),
         "raw": row,  # keep the full original row — nothing is ever lost
     }
 
@@ -107,9 +121,10 @@ def delay_bucket(days: float | None) -> str:
     """Platform-style bucket for a delay: 'ontime' | 'lt30' | '30to90' | 'gt90'
     | 'unknown'. A loan marked delayed without a day count is 'unknown'
     (counted as defaulted-by-status in the aggregate, not by days)."""
-    if days is None:
+    days = _number(days)
+    if days is None or days < 0:
         return "unknown"
-    if days <= 0:
+    if days == 0:
         return "ontime"
     if days < 30:
         return "lt30"
@@ -126,82 +141,67 @@ def is_defaulted(loan: dict) -> bool:
     if status in ("closed", "fully closed", "pre closed", "paid", "ontime",
                   "on time", "advanced"):
         return False
-    if "delay" in status or "overdue" in status or "due" in status:
+    if "delay" in status or "overdue" in status:
         return True
-    days = loan.get("delayDays")
+    days = _number(loan.get("delayDays"))
     if days is not None and days > 0:
         return True
-    # No explicit status/days but money still pending beyond a closed state.
-    pending = to_float(loan.get("totalPending"))
-    received = to_float(loan.get("amountReceived"))
-    invested = to_float(loan.get("amountInvested"))
-    if pending > 0 and received < invested:
-        return True
     return False
+
+
+def _sum_amounts(loans: list[dict], key: str) -> float | None:
+    values = [_number(loan.get(key)) for loan in loans]
+    if any(value is None for value in values):
+        return None
+    total = _number(sum(values))
+    return round(total, 2) if total is not None else None
 
 
 def build_aggregates(loans: list[dict]) -> dict:
     """Aggregate the normalized loan list: counts + money by delay bucket,
     defaulted borrower detail, and the platform's pending splits."""
     loans = [ln for ln in loans if ln]
-    total_invested = sum(to_float(ln.get("amountInvested")) for ln in loans)
-    total_received = sum(to_float(ln.get("amountReceived")) for ln in loans)
-    total_pending = sum(to_float(ln.get("totalPending")) for ln in loans)
-    principal_pending = sum(to_float(ln.get("principalPending")) for ln in loans)
-    interest_pending = sum(to_float(ln.get("interestPending")) for ln in loans)
+    total_invested = _sum_amounts(loans, "amountInvested")
+    total_received = _sum_amounts(loans, "amountReceived")
 
-    buckets: dict[str, dict] = {}
+    buckets: dict[str, list[dict]] = {}
     defaulted: list[dict] = []
     for ln in loans:
         b = delay_bucket(ln.get("delayDays"))
-        bd = buckets.setdefault(b, {"count": 0, "totalPending": 0.0,
-                                    "amountInvested": 0.0})
-        bd["count"] += 1
-        bd["totalPending"] += to_float(ln.get("totalPending"))
-        bd["amountInvested"] += to_float(ln.get("amountInvested"))
+        buckets.setdefault(b, []).append(ln)
         if is_defaulted(ln):
             defaulted.append(ln)
 
-    def _bucket_sum(b: str) -> float:
-        return round(buckets.get(b, {}).get("totalPending", 0.0), 2)
-
     return {
         "totalLoans": len(loans),
-        "totalInvested": round(total_invested, 2),
-        "totalReceived": round(total_received, 2),
-        "totalPending": round(total_pending, 2),
-        "principalPending": round(principal_pending, 2),
-        "interestPending": round(interest_pending, 2),
+        "totalInvested": total_invested,
+        "totalReceived": total_received,
+        "totalPending": _sum_amounts(loans, "totalPending"),
+        "principalPending": _sum_amounts(loans, "principalPending"),
+        "interestPending": _sum_amounts(loans, "interestPending"),
         "delayedBuckets": {
-            "ontime": {"count": buckets.get("ontime", {}).get("count", 0),
-                       "pending": _bucket_sum("ontime")},
-            "lt30": {"count": buckets.get("lt30", {}).get("count", 0),
-                     "pending": _bucket_sum("lt30")},
-            "30to90": {"count": buckets.get("30to90", {}).get("count", 0),
-                       "pending": _bucket_sum("30to90")},
-            "gt90": {"count": buckets.get("gt90", {}).get("count", 0),
-                     "pending": _bucket_sum("gt90")},
-            "unknown": {"count": buckets.get("unknown", {}).get("count", 0),
-                        "pending": _bucket_sum("unknown")},
+            bucket: {"count": len(buckets.get(bucket, [])),
+                     "pending": _sum_amounts(buckets.get(bucket, []), "totalPending")}
+            for bucket in ("ontime", "lt30", "30to90", "gt90", "unknown")
         },
         "defaulted": {
             "count": len(defaulted),
-            "totalPending": round(sum(to_float(d.get("totalPending"))
-                                      for d in defaulted), 2),
+            "totalPending": _sum_amounts(defaulted, "totalPending"),
             "loans": sorted(defaulted,
-                            key=lambda d: to_float(d.get("totalPending")),
+                            key=lambda d: (_number(d.get("totalPending")) is not None,
+                                           _number(d.get("totalPending")) or 0),
                             reverse=True),
         },
         "recoveryRate": (round(total_received / total_invested, 4)
-                         if total_invested else None),
+                         if total_invested and total_received is not None else None),
     }
 
 
 def build_report(client: I2iClient, account: str | None = None,
                  fetch_loan_status: bool = True) -> dict:
     """Full EMI-status snapshot for one account: overview + detail aggregates,
-    the normalized loan book, and the default analytics. Never raises — any
-    endpoint that fails contributes what it can (keys are logged)."""
+    the normalized loan book, and the default analytics. Loan collection must
+    succeed; optional overview and status endpoints remain best-effort."""
     acct = account or accounts.active_account()
     overview = {}
     detail = {}
@@ -218,13 +218,13 @@ def build_report(client: I2iClient, account: str | None = None,
     except Exception as e:  # noqa: BLE001
         log.warning("emi detail failed: %s", e)
 
-    raw_rows = []
-    try:
-        raw_rows = client.emi_loans()
-        if raw_rows:
-            log.info("first emi row keys: %s", sorted(raw_rows[0].keys()))
-    except Exception as e:  # noqa: BLE001
-        log.warning("emi loan list failed: %s", e)
+    raw_rows = client.emi_loans()
+    if not isinstance(raw_rows, list) or any(
+            not isinstance(row, dict) or _first(row, LOAN_ID_KEYS) is None
+            for row in raw_rows):
+        raise ValueError("Invalid EMI loan collection")
+    if raw_rows:
+        log.info("first emi row keys: %s", sorted(raw_rows[0].keys()))
 
     loans = [normalize_loan(r) for r in raw_rows]
 
@@ -238,12 +238,12 @@ def build_report(client: I2iClient, account: str | None = None,
                 st = client.emi_loan_status(ln["loanId"])
                 body = st.get("body", st) if isinstance(st, dict) else {}
                 if isinstance(body, dict):
-                    for k in DELAY_DAYS_KEYS + STATUS_KEYS:
-                        if body.get(k) not in (None, ""):
-                            ln[k.split("_")[0] if "_" in k else k] = body.get(k)
-                    if ln.get("delayDays") in (None, 0) and "delay" in str(
-                            ln.get("currentStatus") or "").lower():
-                        ln["delayDays"] = 0  # present but unknown count
+                    status = normalize_loan({
+                        "currentStatus": _first(body, STATUS_KEYS, ln["currentStatus"]),
+                        "delayDays": _first(body, DELAY_DAYS_KEYS, ln["delayDays"]),
+                    })
+                    ln["currentStatus"] = status["currentStatus"]
+                    ln["delayDays"] = status["delayDays"]
                     enriched += 1
             except Exception:  # noqa: BLE001
                 pass
@@ -294,22 +294,30 @@ def run(account: str | None = None, out_path: str | None = None,
         print(f"no auth for '{acct}' — set credentials to fetch the EMI report")
         return 1
 
-    report = build_report(client, acct)
+    try:
+        report = build_report(client, acct)
+    except Exception as e:  # noqa: BLE001
+        log.error("EMI report failed: %s", type(e).__name__)
+        print(f"EMI report failed for '{acct}' — no report written")
+        return 1
     agg = report["aggregates"]
     path = write_report(report, out_path or f"data/emi-{acct}.json")
     if not quiet:
+        def money(amount: float | None) -> str:
+            return f"{amount:,.0f}" if amount is not None else "unknown"
+
         print(f"account={acct} report -> {path}")
-        print(f"  loans: {agg['totalLoans']} | invested Rs {agg['totalInvested']:,.0f} "
-              f"| received Rs {agg['totalReceived']:,.0f}")
-        print(f"  pending: Rs {agg['totalPending']:,.0f} "
-              f"(principal Rs {agg['principalPending']:,.0f} + "
-              f"interest Rs {agg['interestPending']:,.0f})")
+        print(f"  loans: {agg['totalLoans']} | invested Rs {money(agg['totalInvested'])} "
+              f"| received Rs {money(agg['totalReceived'])}")
+        print(f"  pending: Rs {money(agg['totalPending'])} "
+              f"(principal Rs {money(agg['principalPending'])} + "
+              f"interest Rs {money(agg['interestPending'])})")
         d = agg["delayedBuckets"]
         print(f"  delay buckets: ontime {d['ontime']['count']} | "
               f"<30d {d['lt30']['count']} | 30-90d {d['30to90']['count']} | "
               f">90d {d['gt90']['count']} | unknown {d['unknown']['count']}")
         print(f"  DEFAULTED: {agg['defaulted']['count']} loan(s), "
-              f"Rs {agg['defaulted']['totalPending']:,.0f} remaining")
+              f"Rs {money(agg['defaulted']['totalPending'])} remaining")
         if agg["recoveryRate"] is not None:
             print(f"  recovery rate: {agg['recoveryRate'] * 100:.1f}%")
     return 0
